@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { createSustainabilityChat, addSustainabilityMessage, ChatMessage } from '@/lib/api';
+import { createSustainabilityChat, addSustainabilityMessage, ChatMessage, deleteThread } from '@/lib/api';
 
 interface PanoramaViewerProps {
   isOpen: boolean;
@@ -39,6 +39,30 @@ export default function PanoramaViewer({ isOpen, onClose, panoramaPath, location
   const [imageHistory, setImageHistory] = useState<string[]>([]);
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const [currentDisplayImage, setCurrentDisplayImage] = useState<string | null>(null);
+
+  // Handle close and cleanup
+  const handleClose = async () => {
+    // Delete the thread and chat history
+    if (threadId) {
+      try {
+        await deleteThread(threadId);
+        console.log('Thread deleted successfully');
+      } catch (error) {
+        console.error('Failed to delete thread:', error);
+      }
+    }
+    
+    // Reset state
+    setThreadId('');
+    setMessages([]);
+    setInputMessage('');
+    setImageHistory([]);
+    setCurrentImageIndex(0);
+    setCurrentDisplayImage(null);
+    
+    // Call the parent close handler
+    onClose();
+  };
 
   // Initialize image history when panorama loads
   useEffect(() => {
@@ -112,10 +136,14 @@ export default function PanoramaViewer({ isOpen, onClose, panoramaPath, location
 
         // Check if pannellum is available on window
         if (typeof window !== 'undefined' && window.pannellum) {
+          // Construct proper URL from file path
+          const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001';
+          const panoramaUrl = `${API_BASE_URL}/${currentDisplayImage}`;
+          
           // Initialize Pannellum viewer
           pannellumViewerRef.current = window.pannellum.viewer(viewerRef.current, {
             type: 'equirectangular',
-            panorama: `http://localhost:8001/${currentDisplayImage}`,
+            panorama: panoramaUrl,
             autoLoad: true,
             showControls: true,
             mouseZoom: true,
@@ -260,7 +288,7 @@ export default function PanoramaViewer({ isOpen, onClose, panoramaPath, location
           <p className="text-gray-400 text-sm">Drag to look around • Scroll to zoom</p>
         </div>
         <button
-          onClick={onClose}
+          onClick={handleClose}
           className="text-white hover:text-gray-300 text-2xl w-8 h-8 flex items-center justify-center"
           aria-label="Close panorama viewer"
         >

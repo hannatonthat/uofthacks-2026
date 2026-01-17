@@ -2,7 +2,7 @@
  * API client for Indigenous Land Perspectives backend
  */
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
 export interface RegionData {
   click_location: { lat: number; lon: number };
@@ -73,8 +73,10 @@ export interface ChatResponse {
   agent: string;
   user_message: string;
   assistant_response: string;
-  vision_path?: string;
-  original_image_path?: string;
+  vision_path?: any;
+  original_image_path?: any;
+  vision_url?: any;
+  original_image_url?: any;
 }
 
 export interface ThreadHistory {
@@ -277,6 +279,7 @@ export async function addSustainabilityMessage(
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
+        agent: 'sustainability',
         message,
       }),
     }
@@ -324,6 +327,21 @@ export async function getThreadHistory(threadId: string): Promise<ThreadHistory>
   
   if (!response.ok) {
     throw new Error(`Failed to get thread history: ${response.statusText}`);
+  }
+  
+  return response.json();
+}
+
+/**
+ * Delete a thread and its chat history
+ */
+export async function deleteThread(threadId: string): Promise<any> {
+  const response = await fetch(`${API_BASE_URL}/thread/${threadId}`, {
+    method: 'DELETE',
+  });
+  
+  if (!response.ok) {
+    throw new Error(`Failed to delete thread: ${response.statusText}`);
   }
   
   return response.json();

@@ -2,7 +2,7 @@
 FastAPI Backend for Indigenous Land Perspectives
 UofTHacks 2026
 """
-from fastapi import FastAPI, HTTPException, Query, UploadFile, File
+from fastapi import FastAPI, HTTPException, Query, UploadFile, File, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -96,6 +96,10 @@ class ChatResponse(BaseModel):
     agent: str
     user_message: str
     assistant_response: str
+    vision_path: Optional[str] = None
+    original_image_path: Optional[str] = None
+    vision_url: Optional[str] = None
+    original_image_url: Optional[str] = None
     vision_path: Optional[str] = None
     original_image_path: Optional[str] = None
 
@@ -725,7 +729,7 @@ def generate_panorama(
             "panorama_id": panorama_id,
             "dimensions": f"{total_width}x{max_height}",
             "location": f"{lat},{lon}",
-            "message": "Panorama generated successfully. Use this path with /create-sustainability-chat"
+            "message": "Panorama generated successfully. Use panorama_path to view or pass to /create-sustainability-chat"
         }
     
     except HTTPException:
@@ -862,13 +866,10 @@ def create_sustainability_chat(request: ChatRequest) -> ChatResponse:
 
     agent.add_message("assistant", response)
 
-    # Debug: Log the paths being returned
+    # Return raw file paths - frontend constructs URLs as needed
     vision_path_return = thread_data.get("vision_path")
-    original_path_return = request.image_path
-    print(f"[RESPONSE] Returning paths:")
-    print(f"  - Original image: {original_path_return}")
-    print(f"  - Vision image: {vision_path_return}")
-
+    original_path_return = thread_data.get("image_path")
+    
     return ChatResponse(
         thread_id=thread_id,
         agent="sustainability",
@@ -876,17 +877,16 @@ def create_sustainability_chat(request: ChatRequest) -> ChatResponse:
         assistant_response=response,
         vision_path=vision_path_return,
         original_image_path=original_path_return,
+        vision_url=vision_path_return,
+        original_image_url=original_path_return,
     )
 
 
 @app.post("/add-sustainability-chat")
-def add_sustainability_chat(threadid: str = Query(...), request: ChatRequest = None) -> ChatResponse:
+def add_sustainability_chat(threadid: str = Query(...), request: ChatRequest = Body(...)) -> ChatResponse:
     """Add a message to an existing sustainability thread and optionally regenerate vision using latest image."""
     if threadid not in threads:
         raise HTTPException(status_code=404, detail=f"Thread {threadid} not found")
-
-    if request is None:
-        raise HTTPException(status_code=400, detail="Request body required")
 
     if not request.message:
         raise HTTPException(status_code=400, detail="message field is required for add-sustainability-chat")
@@ -938,12 +938,9 @@ def add_sustainability_chat(threadid: str = Query(...), request: ChatRequest = N
 
     agent.add_message("assistant", response)
 
-    # Debug: Log the paths being returned
+    # Return raw file paths - frontend constructs URLs as needed
     vision_path_return = thread_data.get("vision_path")
     original_path_return = thread_data.get("image_path")
-    print(f"[RESPONSE] Returning paths for follow-up:")
-    print(f"  - Original image: {original_path_return}")
-    print(f"  - Vision image: {vision_path_return}")
 
     return ChatResponse(
         thread_id=threadid,
@@ -952,6 +949,8 @@ def add_sustainability_chat(threadid: str = Query(...), request: ChatRequest = N
         assistant_response=response,
         vision_path=vision_path_return,
         original_image_path=original_path_return,
+        vision_url=vision_path_return,
+        original_image_url=original_path_return,
     )
 
 
@@ -961,7 +960,7 @@ def add_sustainability_chat(threadid: str = Query(...), request: ChatRequest = N
 # Run server
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.getenv("PORT", 8001))
+    port = int(os.getenv("PORT", 8000))
     host = os.getenv("HOST", "127.0.0.1")  # Use localhost instead of 0.0.0.0 for Windows compatibility
     
     uvicorn.run(
