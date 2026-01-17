@@ -386,6 +386,82 @@ export default function Map3D() {
                 )}
               </div>
             </div>
+
+            {/* Ecological Sensitivity Score */}
+            {regionData.ecological_score && (
+              <div className="border-t border-gray-700 pt-3 mt-3">
+                <div>
+                  <p className="text-gray-400">Ecological Sensitivity Score:</p>
+                  <div className="flex items-baseline gap-2">
+                    <p className="text-2xl font-bold text-white">
+                      {regionData.ecological_score.normalized_score?.toFixed(1) || '0.0'}
+                    </p>
+                    <p className="text-sm text-gray-400">/ 10</p>
+                    <p className="text-xs text-gray-500">
+                      ({regionData.ecological_score.total_score?.toFixed(1) || '0'} / 30 raw)
+                    </p>
+                  </div>
+                </div>
+
+                {/* 3-30-300 Rule Compliance */}
+                {regionData.ecological_score.rule_compliance && (
+                  <div className="mt-2 space-y-1">
+                    <p className="text-xs text-gray-400">3-30-300 Rule Status:</p>
+                    <div className="flex items-center gap-2 text-xs">
+                      <span className={regionData.ecological_score.rule_compliance.has_3_trees ? 'text-green-400' : 'text-red-400'}>
+                        {regionData.ecological_score.rule_compliance.has_3_trees ? '✓' : '✗'}
+                      </span>
+                      <span className="text-gray-300">
+                        {regionData.ecological_score.metrics?.street_tree_count?.count || 0} trees visible
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2 text-xs">
+                      <span className={regionData.ecological_score.rule_compliance.within_300m_green_space ? 'text-green-400' : 'text-red-400'}>
+                        {regionData.ecological_score.rule_compliance.within_300m_green_space ? '✓' : '✗'}
+                      </span>
+                      <span className="text-gray-300">Within 300m of green space</span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Detailed Metrics */}
+                <div className="mt-3 space-y-2 text-xs">
+                  <div>
+                    <p className="text-gray-500">Environmental Area Proximity:</p>
+                    <p className="text-white">
+                      {regionData.ecological_score.metrics?.environmental_area_proximity?.score?.toFixed(1) || '0.0'} / 10
+                      {regionData.ecological_score.metrics?.environmental_area_proximity?.distance_meters && (
+                        <span className="text-gray-400 ml-2">
+                          ({(regionData.ecological_score.metrics.environmental_area_proximity.distance_meters).toFixed(0)}m away)
+                        </span>
+                      )}
+                    </p>
+                  </div>
+                  
+                  <div>
+                    <p className="text-gray-500">Green Space Proximity:</p>
+                    <p className="text-white">
+                      {regionData.ecological_score.metrics?.green_space_proximity?.score?.toFixed(1) || '0.0'} / 10
+                      {regionData.ecological_score.metrics?.green_space_proximity?.distance_meters && (
+                        <span className="text-gray-400 ml-2">
+                          ({(regionData.ecological_score.metrics.green_space_proximity.distance_meters).toFixed(0)}m away)
+                        </span>
+                      )}
+                    </p>
+                  </div>
+                  
+                  <div>
+                    <p className="text-gray-500">Street Tree Count:</p>
+                    <p className="text-white">
+                      {regionData.ecological_score.metrics?.street_tree_count?.score?.toFixed(1) || '0.0'} / 10
+                      <span className="text-gray-400 ml-2">
+                        ({regionData.ecological_score.metrics?.street_tree_count?.count || 0} trees)
+                      </span>
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

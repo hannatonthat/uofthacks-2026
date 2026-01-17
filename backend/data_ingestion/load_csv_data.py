@@ -1,6 +1,6 @@
 """
 Load CSV datasets into MongoDB
-Handles: green_spaces, environmental_areas, first_nations, land_vulnerability
+Handles: green_spaces, environmental_areas, first_nations, land_vulnerability, street_trees
 """
 import pandas as pd
 import sys
@@ -253,6 +253,66 @@ def load_land_vulnerability(loader):
         loader.create_geospatial_index(COLLECTIONS["land_vulnerability"])
 
 
+def load_street_trees(loader):
+    """Load street trees data (Toronto)"""
+    print("\n" + "=" * 60)
+    print("Loading Street Trees (Toronto)")
+    print("=" * 60)
+    
+    file_path = DATA_FILES["street_trees"]
+    if not file_path.exists():
+        print(f"[ERROR] File not found: {file_path}")
+        return
+    
+    df = pd.read_csv(file_path)
+    print(f"Read {len(df)} rows from {file_path.name}")
+    
+    documents = []
+    skipped = 0
+    
+    for idx, row in df.iterrows():
+        # Parse geometry (should be Point GeoJSON)
+        geometry = parse_geometry(row.get("geometry"))
+        
+        if not geometry or not validate_geojson(geometry):
+            skipped += 1
+            continue
+        
+        # Get tree name
+        common_name = str(row.get("COMMON_NAME", "Unknown"))
+        botanical_name = str(row.get("BOTANICAL_NAME", ""))
+        
+        doc = {
+            "name": common_name,
+            "type": "street_tree",
+            "properties": {
+                "objectid": int(row.get("OBJECTID")) if pd.notna(row.get("OBJECTID")) else None,
+                "structid": str(row.get("STRUCTID", "")),
+                "address": str(row.get("ADDRESS", "")),
+                "street_name": str(row.get("STREETNAME", "")),
+                "botanical_name": botanical_name,
+                "common_name": common_name,
+                "dbh_trunk": float(row.get("DBH_TRUNK")) if pd.notna(row.get("DBH_TRUNK")) else None,
+                "ward": str(row.get("WARD", "")),
+            },
+            "geometry": geometry,
+            "metadata": {
+                "source": "Street Tree Data - 4326.csv",
+                "loaded_at": datetime.utcnow(),
+            }
+        }
+        
+        documents.append(doc)
+        
+        # Progress indicator for large dataset
+        if (idx + 1) % 10000 == 0:
+            print(f"  Processed {idx + 1:,} rows...")
+    
+    print(f"Processed {len(documents)} valid documents ({skipped} skipped)")
+    loader.bulk_insert(COLLECTIONS["street_trees"], documents)
+    loader.create_geospatial_index(COLLECTIONS["street_trees"])
+
+
 if __name__ == "__main__":
     loader = MongoDBLoader()
     
@@ -261,6 +321,7 @@ if __name__ == "__main__":
         load_environmental_areas(loader)
         load_first_nations(loader)
         load_land_vulnerability(loader)
+        load_street_trees(loader)
         
         print("\n" + "=" * 60)
         print("CSV Data Loading Complete!")

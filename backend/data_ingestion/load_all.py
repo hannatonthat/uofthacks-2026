@@ -11,7 +11,8 @@ from data_ingestion.load_csv_data import (
     load_green_spaces,
     load_environmental_areas,
     load_first_nations,
-    load_land_vulnerability
+    load_land_vulnerability,
+    load_street_trees
 )
 from data_ingestion.load_xlsx_data import (
     load_indigenous_territories,
@@ -35,6 +36,7 @@ def main():
         load_environmental_areas(loader)
         load_first_nations(loader)
         load_land_vulnerability(loader)
+        load_street_trees(loader)
         
         # Load XLSX data
         print("\n### LOADING XLSX DATASETS ###\n")

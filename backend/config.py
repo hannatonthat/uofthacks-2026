@@ -32,7 +32,7 @@ DATA_DIR = Path(__file__).parent.parent / "Data"
 DATA_FILES = {
     "green_spaces": DATA_DIR / "green_spaces_toronto.csv",
     "environmental_areas": DATA_DIR / "environmentally_significant_areas_toronto.csv",
-    "street_trees": DATA_DIR / "street_trees_toronto.7z",  # Will need extraction
+    "street_trees": DATA_DIR / "Street Tree Data - 4326.csv",
     "indigenous_territories": DATA_DIR / "native_land_territories_canada_coords.xlsx",
     "indigenous_treaties": DATA_DIR / "native_land_treaties_canada_coords.xlsx",
     "indigenous_languages": DATA_DIR / "native_land_languages_canada_coords.xlsx",

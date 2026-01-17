@@ -16,12 +16,22 @@ export interface RegionData {
     indigenous_treaties?: any[];
     indigenous_languages?: any[];
   };
-  sustainability_score: {
-    score: number;
-    raw_score: number;
+  ecological_score: {
+    total_score: number;  // 0-30
+    normalized_score: number;  // 0-10
     max_score: number;
-    breakdown: any;
+    metrics: {
+      environmental_area_proximity: any;
+      green_space_proximity: any;
+      street_tree_count: any;
+    };
+    rule_compliance: {
+      has_3_trees: boolean;
+      within_300m_green_space: boolean;
+      rule_330_compliant: boolean;
+    };
   };
+  sustainability_score: any;  // Legacy field
   native_plants: any;
   recommendations: string[];
 }

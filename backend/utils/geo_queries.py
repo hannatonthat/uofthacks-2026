@@ -238,63 +238,126 @@ def find_in_bounds(
     return results
 
 
-def calculate_sustainability_score(lon: float, lat: float, radius_meters: int = 1000) -> Dict[str, Any]:
+def calculate_ecological_sensitivity_score(
+    lon: float, 
+    lat: float, 
+    search_radius_meters: int = 1000
+) -> Dict[str, Any]:
     """
-    Calculate sustainability score based on nearby features
+    Calculate ecological sensitivity score based on 3-30-300 rule
     
-    Scoring factors:
-    - Green spaces nearby: +2 points per space (max 10)
-    - Environmental areas: +3 points per area (max 15)
-    - Trees nearby: +0.1 per tree (max 10)
-    - Indigenous territory presence: +5
+    Metrics (30 points total):
+    1. Proximity to Environmentally Significant Area (10 pts)
+    2. Proximity to Green Space (10 pts) 
+    3. Number of Street Trees within radius (10 pts)
     
     Returns:
-        Dictionary with score and breakdown
+        {
+            "total_score": float,  # 0-30
+            "normalized_score": float,  # 0-10 for display
+            "metrics": {
+                "environmental_area_proximity": {...},
+                "green_space_proximity": {...},
+                "street_tree_count": {...}
+            },
+            "rule_compliance": {
+                "has_3_trees": bool,
+                "within_300m_green_space": bool
+            }
+        }
     """
     score = 0
-    breakdown = {}
+    metrics = {}
     
-    # Count green spaces
-    green_spaces = find_near_point("green_spaces", lon, lat, radius_meters, limit=10)
-    green_score = min(len(green_spaces) * 2, 10)
-    score += green_score
-    breakdown["green_spaces"] = {
-        "count": len(green_spaces),
-        "score": green_score,
-        "max": 10
+    # Metric 1: Environmental Area Proximity (10 points)
+    # Score = 10 - 10 * (1 - d/d_min), d_min = 1km
+    env_areas = find_near_point("environmental_areas", lon, lat, 1000, limit=1)
+    if env_areas and len(env_areas) > 0:
+        distance = env_areas[0].get("distance", 1001)
+        if distance <= 1000:
+            env_score = 10 - 10 * (1 - distance / 1000)
+        else:
+            env_score = 0
+    else:
+        env_score = 0
+        distance = None
+    
+    metrics["environmental_area_proximity"] = {
+        "score": round(env_score, 2),
+        "max": 10,
+        "distance_meters": round(distance, 2) if distance else None,
+        "nearest_area": env_areas[0].get("name") if env_areas else None
     }
-    
-    # Count environmental areas
-    env_areas = find_near_point("environmental_areas", lon, lat, radius_meters, limit=10)
-    env_score = min(len(env_areas) * 3, 15)
     score += env_score
-    breakdown["environmental_areas"] = {
-        "count": len(env_areas),
-        "score": env_score,
-        "max": 15
-    }
     
-    # Check if in indigenous territory
-    territory = find_containing_territory(lon, lat)
-    territory_score = 5 if territory else 0
-    score += territory_score
-    breakdown["indigenous_territory"] = {
-        "present": bool(territory),
-        "name": territory.get("name") if territory else None,
-        "score": territory_score,
-        "max": 5
-    }
+    # Metric 2: Green Space Proximity (10 points)
+    # Score = 10 - 10 * (1 - d/d_min), d_min = 0.3km (300m)
+    green_spaces = find_near_point("green_spaces", lon, lat, 300, limit=1)
+    if green_spaces and len(green_spaces) > 0:
+        distance = green_spaces[0].get("distance", 301)
+        if distance <= 300:
+            green_score = 10 - 10 * (1 - distance / 300)
+        else:
+            green_score = 0
+    else:
+        green_score = 0
+        distance = None
     
-    # Normalize to 0-10 scale (max possible is 30)
-    normalized_score = round((score / 30) * 10, 1)
+    metrics["green_space_proximity"] = {
+        "score": round(green_score, 2),
+        "max": 10,
+        "distance_meters": round(distance, 2) if distance else None,
+        "nearest_space": green_spaces[0].get("name") if green_spaces else None,
+        "within_300m": distance <= 300 if distance else False
+    }
+    score += green_score
+    
+    # Metric 3: Street Trees Count (10 points)
+    # Score = 10 - 10 * (1 - n/n_min), n_min = 3 trees
+    # Using smaller radius and limit for performance with 689K tree dataset
+    try:
+        # Use smaller radius (300m max) for tree queries to improve speed
+        tree_radius = min(search_radius_meters, 300)
+        street_trees = find_near_point("street_trees", lon, lat, tree_radius, limit=5)
+        tree_count = len(street_trees)
+        if tree_count >= 3:
+            tree_score = 10
+        else:
+            tree_score = 10 - 10 * (1 - tree_count / 3)
+    except Exception as e:
+        print(f"Street trees not available: {e}")
+        tree_count = 0
+        tree_score = 0
+    
+    metrics["street_tree_count"] = {
+        "score": round(tree_score, 2),
+        "max": 10,
+        "count": tree_count,
+        "search_radius_meters": search_radius_meters,
+        "has_minimum_3": tree_count >= 3
+    }
+    score += tree_score
+    
+    # Rule compliance check
+    rule_compliance = {
+        "has_3_trees": tree_count >= 3,
+        "within_300m_green_space": metrics["green_space_proximity"]["within_300m"],
+        "rule_330_compliant": tree_count >= 3 and metrics["green_space_proximity"]["within_300m"]
+    }
     
     return {
-        "score": normalized_score,
-        "raw_score": score,
+        "total_score": round(score, 2),
+        "normalized_score": round((score / 30) * 10, 2),  # 0-10 scale
         "max_score": 30,
-        "breakdown": breakdown,
+        "metrics": metrics,
+        "rule_compliance": rule_compliance,
         "location": {"lon": lon, "lat": lat}
     }
+
+
+def calculate_sustainability_score(lon: float, lat: float, radius_meters: int = 1000) -> Dict[str, Any]:
+    """Legacy function - calls new ecological sensitivity score"""
+    return calculate_ecological_sensitivity_score(lon, lat, radius_meters)
 
 
 def get_native_plants_for_territory(territory_name: str) -> List[str]:

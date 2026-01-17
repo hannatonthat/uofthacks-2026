@@ -15,6 +15,7 @@ from utils.geo_queries import (
     find_all_near_point,
     find_containing_territory,
     find_in_bounds,
+    calculate_ecological_sensitivity_score,
     calculate_sustainability_score,
     get_native_plants_for_territory,
     get_nearest_first_nation
@@ -108,16 +109,17 @@ async def get_region_data(
         # Find containing indigenous territory
         territory = find_containing_territory(lon, lat)
         
-        # Calculate sustainability score (with error handling)
+        # Calculate ecological sensitivity score with detailed metrics
         try:
-            sustainability = calculate_sustainability_score(lon, lat, radius)
+            ecological_score = calculate_ecological_sensitivity_score(lon, lat, radius)
         except Exception as e:
-            print(f"Error calculating sustainability: {e}")
-            sustainability = {
-                "score": 5.0,
-                "raw_score": 0,
-                "max_score": 10,
-                "breakdown": {}
+            print(f"Error calculating ecological score: {e}")
+            ecological_score = {
+                "total_score": 0,
+                "normalized_score": 0,
+                "max_score": 30,
+                "metrics": {},
+                "rule_compliance": {}
             }
         
         # Get nearest First Nation community (with error handling)
@@ -133,7 +135,8 @@ async def get_region_data(
             "indigenous_territory": territory,
             "nearest_first_nation": nearest_community,
             "nearby_data": nearby_data,
-            "sustainability_score": sustainability,
+            "ecological_score": ecological_score,
+            "sustainability_score": ecological_score,  # Keep for backward compatibility
         }
     
     except Exception as e:
