@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import os
 from typing import List, Optional, Dict, Any, TypedDict
-from agents import BaseAgent, AgentConfig
-from backboard_provider import BackboardProvider
-from prompts_config import get_prompt, get_all_constraints
+from .agents import BaseAgent, AgentConfig
+from .backboard_provider import BackboardProvider
+from .prompts_config import get_prompt, get_all_constraints
 
 
 class SustainabilityAgent(BaseAgent):
@@ -26,6 +26,7 @@ class SustainabilityAgent(BaseAgent):
 	def __init__(self, name: str = "sustainability-agent", config: Optional[AgentConfig] = None, base_prompt: str = ""):
 		"""Init sustainability agent, wire Backboard Gemini assistant, cache prompts."""
 		super().__init__(name, config)
+		self.thread_id: Optional[str] = None
 		
 		# Load prompts from centralized config
 		loaded_base_prompt = get_prompt("sustainability_agent", "base_prompt")
@@ -40,7 +41,7 @@ class SustainabilityAgent(BaseAgent):
 		
 		# Initialize Backboard provider for unified LLM access
 		try:
-			from backboard_provider import BackboardProvider
+			from .backboard_provider import BackboardProvider
 			self.backboard = BackboardProvider()
 			
 			# Create Backboard assistant for Gemini
@@ -59,6 +60,50 @@ class SustainabilityAgent(BaseAgent):
 		# Reserved for future feature: native flora data
 		self._native_flowers: List[Dict[str, str]] = []
 
+	def chat_with_context(self, user_query: str, context: str = "") -> str:
+		"""Chat entry point for sustainability agent with Backboard + local fallback."""
+		constraints = get_all_constraints("sustainability_agent")
+		constraint_text = "\n".join(f"- {c}" for c in constraints) if constraints else ""
+		history_text = self._history_to_text()
+
+		prompt_parts = [
+			self._prompt or "You are an expert in sustainable land design that respects indigenous practices.",
+			f"Context: {context}" if context else "Context: none provided",
+			f"User request: {user_query}",
+			"Constraints:",
+			constraint_text,
+			"Conversation so far:",
+			history_text,
+		]
+		prompt = "\n\n".join(p for p in prompt_parts if p)
+
+		self.add_message("user", user_query)
+
+		response: str
+		if self.backboard and self.assistant_id:
+			try:
+				response, self.thread_id = self.backboard.chat(self.assistant_id, prompt, self.thread_id)
+			except Exception as e:
+				response = self._local_fallback(user_query, context, f"Backboard error: {e}")
+		else:
+			response = self._local_fallback(user_query, context, "Backboard not initialized")
+
+		self.add_message("assistant", response)
+		return response
+
+	def _local_fallback(self, user_query: str, context: str, reason: str = "") -> str:
+		"""Offline fallback: deterministic, constraint-aware suggestions when LLM unavailable."""
+		prefix = "Unable to reach model; using quick local guidance. "
+		if reason:
+			prefix += f"({reason}) "
+
+		context_note = context or "small park"
+		return (
+			f"{prefix}Here are two respectful redesign ideas for {context_note}:\n"
+			"1) Add native tree clusters, a rain garden, and permeable paths that protect waterways and honor existing gathering spaces.\n"
+			"2) Create a quiet medicinal plant garden with signage about indigenous stewardship, plus shaded seating and a small play loop built from natural materials."
+		)
+
 	def run_full_analysis(self, image_path: str, context: str = "", vision_output_path: str = None) -> Dict[str, Any]:
 		"""Run analyze → redesign → vision via LangGraph when available, else sequential fallback."""
 		try:
@@ -75,7 +120,8 @@ class SustainabilityAgent(BaseAgent):
 			
 			def vision_node(state: SustainabilityAgent.AnalysisState) -> SustainabilityAgent.AnalysisState:
 				out_path = vision_output_path or f"future_vision_{state['image_path'].split('/')[-1]}"
-				future = self.generate_future_vision(state["image_path"], out_path)
+				# Pass context as extra_instructions to the vision generation
+				future = self.generate_future_vision(state["image_path"], out_path, extra_instructions=context)
 				return {**state, "future_vision_path": future}
 			
 			graph = StateGraph(SustainabilityAgent.AnalysisState)
@@ -108,7 +154,8 @@ class SustainabilityAgent(BaseAgent):
 				analysis_context = context or str(analysis)
 				suggestions = self.suggest_sustainable_redesign(analysis_context)
 				out_path = vision_output_path or f"future_vision_{image_path.split('/')[-1]}"
-				future = self.generate_future_vision(image_path, out_path)
+				# Pass context as extra_instructions to vision generation
+				future = self.generate_future_vision(image_path, out_path, extra_instructions=context)
 				return {
 					"image_path": image_path,
 					"analysis": analysis,
@@ -208,8 +255,9 @@ class SustainabilityAgent(BaseAgent):
 			# Fallback to basic prompt if config not loaded
 			prompt = "Enhance this image by adding subtle sustainable and ecological improvements while keeping the overall layout and structure recognizable."
 		
+		# Append extra instructions (user message) to the prompt
 		if extra_instructions.strip():
-			prompt += f"\n\nEXTRA REQUESTS:\n{extra_instructions.strip()}\n"
+			prompt += f"\n\nUSER REQUEST:\n{extra_instructions.strip()}\n"
 		
 		response = client.models.generate_content(
 			model="gemini-2.5-flash-image",
