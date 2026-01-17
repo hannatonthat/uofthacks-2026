@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import Map, { MapRef, Layer, type MapMouseEvent } from 'react-map-gl/mapbox';
 import { getRegionData, RegionData, generatePanorama } from '@/lib/api';
 import AgentModal from './AgentModal';
+import PanoramaViewer from './PanoramaViewer';
 import 'mapbox-gl/dist/mapbox-gl.css';
 
 // GTA bounds
@@ -31,6 +32,7 @@ export default function Map3D() {
   const [panoramaPath, setPanoramaPath] = useState<string | null>(null);
   const [panoramaLoading, setPanoramaLoading] = useState(false);
   const [agentModalOpen, setAgentModalOpen] = useState(false);
+  const [panoramaViewerOpen, setPanoramaViewerOpen] = useState(false);
   const [viewport, setViewport] = useState({
     latitude: GTA_CENTER[1],
     longitude: GTA_CENTER[0],
@@ -348,12 +350,18 @@ export default function Map3D() {
               </div>
             </div>
           ) : panoramaPath ? (
-            <div className="mb-4 border border-gray-700 rounded-lg overflow-hidden">
-              <img 
-                src={`http://localhost:8001/${panoramaPath}`}
-                alt="Street View Panorama"
-                className="w-full h-32 object-cover"
-              />
+            <div className="mb-4">
+              <button
+                onClick={() => setPanoramaViewerOpen(true)}
+                className="w-full border border-gray-700 rounded-lg overflow-hidden hover:border-gray-500 transition-all group cursor-pointer"
+              >
+                <img 
+                  src={`http://localhost:8001/${panoramaPath}`}
+                  alt="Street View Panorama"
+                  className="w-full h-32 object-cover group-hover:scale-105 transition-transform duration-300"
+                />
+              </button>
+              <p className="text-xs text-gray-400 mt-2 text-center">Click to explore in 360°</p>
             </div>
           ) : null}
 
@@ -528,6 +536,19 @@ export default function Map3D() {
       <AgentModal
         isOpen={agentModalOpen}
         onClose={() => setAgentModalOpen(false)}
+        panoramaPath={panoramaPath}
+        locationData={selectedPoint ? {
+          lat: selectedPoint.lat,
+          lon: selectedPoint.lon,
+          address: selectedPoint.address || selectedPoint.name,
+          territory: regionData?.indigenous_territory?.name
+        } : null}
+      />
+
+      {/* 360° Panorama Viewer */}
+      <PanoramaViewer
+        isOpen={panoramaViewerOpen}
+        onClose={() => setPanoramaViewerOpen(false)}
         panoramaPath={panoramaPath}
         locationData={selectedPoint ? {
           lat: selectedPoint.lat,

@@ -73,6 +73,8 @@ export interface ChatResponse {
   agent: string;
   user_message: string;
   assistant_response: string;
+  vision_path?: string;
+  original_image_path?: string;
 }
 
 export interface ThreadHistory {
@@ -235,7 +237,60 @@ export async function createAgentChat(
 }
 
 /**
- * Send message to existing agent chat thread
+ * Create sustainability chat with full analysis (returns both original and vision paths)
+ */
+export async function createSustainabilityChat(
+  message: string,
+  imagePath: string
+): Promise<ChatResponse> {
+  const response = await fetch(`${API_BASE_URL}/create-sustainability-chat`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      agent: 'sustainability',
+      message,
+      image_path: imagePath,
+    }),
+  });
+  
+  if (!response.ok) {
+    throw new Error(`Failed to create sustainability chat: ${response.statusText}`);
+  }
+  
+  return response.json();
+}
+
+/**
+ * Add message to sustainability chat (generates new vision)
+ */
+export async function addSustainabilityMessage(
+  threadId: string,
+  message: string
+): Promise<ChatResponse> {
+  const response = await fetch(
+    `${API_BASE_URL}/add-sustainability-chat?threadid=${threadId}`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        message,
+      }),
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error(`Failed to send message: ${response.statusText}`);
+  }
+
+  return response.json();
+}
+
+/**
+ * Send message to existing agent chat thread (generic)
  */
 export async function sendAgentMessage(
   threadId: string,
@@ -253,11 +308,11 @@ export async function sendAgentMessage(
       }),
     }
   );
-  
+
   if (!response.ok) {
     throw new Error(`Failed to send message: ${response.statusText}`);
   }
-  
+
   return response.json();
 }
 

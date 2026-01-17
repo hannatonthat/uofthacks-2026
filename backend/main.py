@@ -96,6 +96,8 @@ class ChatResponse(BaseModel):
     agent: str
     user_message: str
     assistant_response: str
+    vision_path: Optional[str] = None
+    original_image_path: Optional[str] = None
 
 
 # Startup and shutdown events
@@ -449,8 +451,8 @@ def create_chat(request: ChatRequest) -> ChatResponse:
     else:
         raise HTTPException(status_code=400, detail="Invalid agent. Use 'sustainability', 'indigenous', or 'proposal'")
 
-    # Store agent in thread storage
-    thread_data = {"agent": agent, "image_path": None}
+    # Store agent in thread storage with image path if provided
+    thread_data = {"agent": agent, "image_path": request.image_path}
     threads[thread_id] = thread_data
 
     # Use provided message or agent-specific default
@@ -466,10 +468,27 @@ def create_chat(request: ChatRequest) -> ChatResponse:
     # Send the first user message to the model immediately
     agent.add_message("user", user_message)
 
+    vision_path = None
     try:
         # Call appropriate chat method based on agent type
         if request.agent.lower() == "sustainability":
-            response = agent.chat_with_context(user_message, context="")
+            # If image provided, run full analysis with vision generation
+            if request.image_path:
+                vision_output_path = f"{UPLOAD_DIR}/vision_{thread_id}_initial.png"
+                analysis_result = agent.run_full_analysis(
+                    request.image_path,
+                    context=user_message,
+                    vision_output_path=vision_output_path
+                )
+                thread_data["vision_path"] = analysis_result.get("future_vision_path")
+                vision_path = analysis_result.get("future_vision_path")
+                
+                # Build response from analysis
+                response = f"Analysis complete.\n\nSuggestions:\n" + "\n".join(
+                    analysis_result.get("redesign_suggestions", [])
+                )
+            else:
+                response = agent.chat_with_context(user_message, context="")
         else:
             # Indigenous and Proposal agents don't accept context parameter
             response = agent.chat_with_context(user_message)
@@ -483,6 +502,7 @@ def create_chat(request: ChatRequest) -> ChatResponse:
         agent=request.agent,
         user_message=user_message,
         assistant_response=response,
+        vision_path=vision_path,
     )
 
 
@@ -501,11 +521,29 @@ def start_chat(threadid: str = Query(...), request: ChatRequest = None) -> ChatR
 
     agent.add_message("user", request.message)
     agent_name = type(agent).__name__
+    vision_path = None
 
     try:
         if agent_name == "SustainabilityAgent":
-            context = f"Image path: {image_path}" if image_path else ""
-            response = agent.chat_with_context(request.message, context=context)
+            # Run full analysis with image generation if image exists
+            if image_path:
+                import time
+                vision_output_path = f"{UPLOAD_DIR}/vision_{threadid}_{int(time.time())}.png"
+                analysis_result = agent.run_full_analysis(
+                    image_path,
+                    context=request.message,
+                    vision_output_path=vision_output_path
+                )
+                thread_data["vision_path"] = analysis_result.get("future_vision_path")
+                vision_path = analysis_result.get("future_vision_path")
+                
+                # Build response from analysis
+                response = f"Analysis complete.\n\nSuggestions:\n" + "\n".join(
+                    analysis_result.get("redesign_suggestions", [])
+                )
+            else:
+                context = f"Image path: {image_path}" if image_path else ""
+                response = agent.chat_with_context(request.message, context=context)
         elif agent_name == "IndigenousContextAgent":
             response = agent.chat_with_context(request.message)
         elif agent_name == "ProposalWorkflowAgent":
@@ -522,6 +560,7 @@ def start_chat(threadid: str = Query(...), request: ChatRequest = None) -> ChatR
         agent=agent_name,
         user_message=request.message,
         assistant_response=response,
+        vision_path=vision_path,
     )
 
 
@@ -799,12 +838,21 @@ def create_sustainability_chat(request: ChatRequest) -> ChatResponse:
                 vision_output_path=vision_output_path
             )
             thread_data["image_path"] = request.image_path
-            thread_data["vision_path"] = analysis_result.get("future_vision_path")
+            
+            # Only set vision_path if file actually exists
+            future_vision = analysis_result.get("future_vision_path")
+            if future_vision and os.path.exists(future_vision):
+                thread_data["vision_path"] = future_vision
+            else:
+                thread_data["vision_path"] = None
+                print(f"Vision generation failed or file not created: {future_vision}")
             
             # Build response from analysis
-            response = f"Analysis complete.\n\nSuggestions:\n" + "\n".join(
-                analysis_result.get("redesign_suggestions", [])
-            )
+            suggestions = analysis_result.get("redesign_suggestions", [])
+            if suggestions:
+                response = f"Analysis complete.\n\nSuggestions:\n" + "\n".join(suggestions)
+            else:
+                response = "Analysis complete. I can provide suggestions for sustainable improvements. What aspects would you like me to focus on?"
         else:
             # No image, just chat
             context = f"Image path: {request.image_path}" if request.image_path else ""
@@ -814,11 +862,20 @@ def create_sustainability_chat(request: ChatRequest) -> ChatResponse:
 
     agent.add_message("assistant", response)
 
+    # Debug: Log the paths being returned
+    vision_path_return = thread_data.get("vision_path")
+    original_path_return = request.image_path
+    print(f"[RESPONSE] Returning paths:")
+    print(f"  - Original image: {original_path_return}")
+    print(f"  - Vision image: {vision_path_return}")
+
     return ChatResponse(
         thread_id=thread_id,
         agent="sustainability",
         user_message=user_message,
         assistant_response=response,
+        vision_path=vision_path_return,
+        original_image_path=original_path_return,
     )
 
 
@@ -858,12 +915,21 @@ def add_sustainability_chat(threadid: str = Query(...), request: ChatRequest = N
                 context=request.message,
                 vision_output_path=vision_output_path
             )
-            thread_data["vision_path"] = analysis_result.get("future_vision_path")
+            
+            # Only set vision_path if file actually exists
+            future_vision = analysis_result.get("future_vision_path")
+            if future_vision and os.path.exists(future_vision):
+                thread_data["vision_path"] = future_vision
+            else:
+                thread_data["vision_path"] = None
+                print(f"Vision generation failed or file not created: {future_vision}")
             
             # Build response from analysis
-            response = f"Updated analysis based on: {request.message}\n\nSuggestions:\n" + "\n".join(
-                analysis_result.get("redesign_suggestions", [])
-            )
+            suggestions = analysis_result.get("redesign_suggestions", [])
+            if suggestions:
+                response = f"Updated analysis.\n\nSuggestions:\n" + "\n".join(suggestions)
+            else:
+                response = "I can help improve this location. What specific changes would you like to see?"
         else:
             # No image, just chat
             response = agent.chat_with_context(request.message, context="")
@@ -872,11 +938,20 @@ def add_sustainability_chat(threadid: str = Query(...), request: ChatRequest = N
 
     agent.add_message("assistant", response)
 
+    # Debug: Log the paths being returned
+    vision_path_return = thread_data.get("vision_path")
+    original_path_return = thread_data.get("image_path")
+    print(f"[RESPONSE] Returning paths for follow-up:")
+    print(f"  - Original image: {original_path_return}")
+    print(f"  - Vision image: {vision_path_return}")
+
     return ChatResponse(
         thread_id=threadid,
         agent="sustainability",
         user_message=request.message,
         assistant_response=response,
+        vision_path=vision_path_return,
+        original_image_path=original_path_return,
     )
 
 
