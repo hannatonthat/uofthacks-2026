@@ -7,26 +7,35 @@ PROMPTS = {
 Focus on water systems, native vegetation, wildlife corridors, and cultural significance.
 Format as a numbered list.
 Each suggestion should be 1-2 sentences, concrete and implementable.""",
-        "future_vision_image_prompt": """Enhance this image by adding subtle sustainable and ecological improvements while keeping the overall layout and structure recognizable:
+        "future_vision_image_prompt": """Make LOGICAL, REALISTIC enhancements to this PANORAMIC image. Changes should be 30-40% visible - meaningful improvements placed in appropriate locations:
 
-SUBTLE ADDITIONS (keep existing features, add these):
-• Add bike lanes marked on roads - painted clearly but not intrusive
-• Plant trees strategically along streets and open areas (20-30% more greenery, not overwhelming)
-• Add small community gardens or green spaces in unused areas
-• Increase water features modestly - small pond or rain garden if space allows
-• Add green roofs or solar panels on existing buildings (visible but not dominating)
-• Place benches and small parks in empty spaces
-• Plant native vegetation and flowers in landscaping areas
-• Add small walking/pedestrian paths through available spaces
+CRITICAL RULES - MUST FOLLOW:
+• PRESERVE THE PANORAMA FORMAT - Keep it panoramic (360° view, 2:1 aspect ratio)
+• PRESERVE ALL EXISTING STRUCTURES - Buildings, roads must look exactly the same
+• PRESERVE THE PERSPECTIVE - No changes to viewing angle or composition
+• KEEP IT LOGICAL - Plant trees on sidewalks/edges, not in the middle of roads
+• ADD 30-40% VISIBLE CHANGES - More noticeable than subtle, but still realistic
+• ITERATIVE ENHANCEMENTS - Add only the newly requested improvements to what was previously shown
+• DO NOT START OVER - Keep any previous improvements and build upon them
+• REALISTIC TIMELINE - Show what could naturally happen in 5-10 years with planning
 
-IMPORTANT CONSTRAINTS:
-• Keep the existing buildings, roads, and general structure recognizable and mostly unchanged
-• The image should look like subtle improvements to the existing location, not a complete redesign
-• Maintain the same perspective and scale as the original
-• Make it look like realistic, achievable improvements you could implement in 5-10 years
-• The overall composition should be very similar to the original, just enhanced
+SMART PLACEMENT RULES:
+• Trees: Plant along sidewalks, park edges, building perimeters (NEVER in road lanes)
+• Gardens: Place in empty lots, park corners, unused spaces (NOT blocking pedestrian/vehicle traffic)
+• Bus lanes: Paint lane markings on existing roads (no lane removal, just reallocation)
+• Benches: Put along walkways, in parks, under trees
+• Water features: Small ponds/rain gardens in parks or green spaces (not on roads)
+• Green roofs: Add to buildings where visible
+• Bike lanes: Paint on road edges and sidewalk areas
 
-STYLE: Photorealistic, maintain existing colors and lighting, just show what this space could look like with thoughtful sustainable enhancements.""",
+DO NOT:
+• Put plants or features in the middle of active road lanes
+• Remove or obscure existing infrastructure
+• Major street layout changes
+• Dramatically alter building appearances
+• Anything illogical or unrealistic
+
+SCALE: 30-40% visible enhancement - clear improvements but still recognizable as the same location.""",
         "constraints": [
             "Do not suggest industrial development or resource extraction",
             "Do not recommend removal of indigenous cultural sites or sacred lands",

@@ -10,6 +10,11 @@ from datetime import datetime
 import os
 import uuid
 import shutil
+import requests
+import numpy as np
+from PIL import Image
+from io import BytesIO
+from concurrent.futures import ThreadPoolExecutor
 
 from agents.specialized_agents import SustainabilityAgent, IndigenousContextAgent, ProposalWorkflowAgent
 
@@ -600,6 +605,163 @@ def delete_thread(threadid: str):
 
 
 # Sustainability-specific endpoints
+
+@app.get("/generate-panorama")
+def generate_panorama(
+    lat: float = Query(..., ge=-90, le=90, description="Latitude"),
+    lon: float = Query(..., ge=-180, le=180, description="Longitude"),
+    num_directions: int = Query(4, ge=1, le=16, description="Number of Street View directions to stitch"),
+    pitch: int = Query(0, ge=-90, le=90, description="Camera pitch (-90 to 90)"),
+    size: str = Query("600x400", description="Image size (widthxheight)"),
+) -> Dict[str, str]:
+    """Generate a 360° panorama from Street View images at given lat/lon, optimized for sustainable vision generation."""
+    try:
+        api_key = os.getenv("GOOGLE_API_MAP_KEY")
+        if not api_key:
+            raise HTTPException(status_code=500, detail="GOOGLE_API_MAP_KEY not set in environment")
+        
+        headings = np.linspace(0, 360, num_directions, endpoint=False)
+        images_list = []
+        
+        def fetch_image(heading):
+            try:
+                url = f"https://maps.googleapis.com/maps/api/streetview?size={size}&location={lat},{lon}&heading={heading}&pitch={pitch}&radius=50&key={api_key}"
+                response = requests.get(url, timeout=10)
+                if response.status_code == 200:
+                    return int(heading), Image.open(BytesIO(response.content))
+            except Exception as e:
+                print(f"  Error loading {heading}°: {e}")
+            return None, None
+        
+        print(f"Fetching {num_directions} Street View images for panorama at {lat},{lon}...")
+        
+        # Fetch all images in parallel
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            futures = [executor.submit(fetch_image, heading) for heading in headings]
+            results = []
+            for future in futures:
+                try:
+                    heading, img = future.result(timeout=15)
+                    if img:
+                        results.append((heading, img))
+                        print(f"  Loaded {heading}°")
+                except Exception as e:
+                    print(f"  Failed to load image: {e}")
+        
+        if not results:
+            raise HTTPException(status_code=500, detail="Failed to fetch Street View images for this location")
+        
+        # Sort by heading and extract images
+        results.sort(key=lambda x: x[0])
+        images_list = [img for _, img in results]
+        
+        # Stitch images horizontally into panorama
+        total_width = sum(img.width for img in images_list)
+        max_height = images_list[0].height
+        
+        panorama = Image.new('RGB', (total_width, max_height))
+        x_offset = 0
+        for img in images_list:
+            panorama.paste(img, (x_offset, 0))
+            x_offset += img.width
+        
+        # Save panorama
+        panorama_id = str(uuid.uuid4())
+        panorama_path = f"{UPLOAD_DIR}/panorama_{panorama_id}.png"
+        panorama.save(panorama_path)
+        
+        print(f"✓ Panorama generated: {panorama_path} ({total_width}x{max_height})")
+        
+        return {
+            "panorama_path": panorama_path,
+            "panorama_id": panorama_id,
+            "dimensions": f"{total_width}x{max_height}",
+            "location": f"{lat},{lon}",
+            "message": "Panorama generated successfully. Use this path with /create-sustainability-chat"
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generating panorama: {str(e)}")
+def generate_panorama(
+    lat: float = Query(..., ge=-90, le=90, description="Latitude"),
+    lon: float = Query(..., ge=-180, le=180, description="Longitude"),
+    num_directions: int = Query(4, ge=1, le=16, description="Number of Street View directions to stitch"),
+    pitch: int = Query(0, ge=-90, le=90, description="Camera pitch (-90 to 90)"),
+    size: str = Query("600x400", description="Image size (widthxheight)"),
+) -> Dict[str, str]:
+    """Generate a 360° panorama from Street View images at given lat/lon, optimized for sustainable vision generation."""
+    try:
+        api_key = os.getenv("GOOGLE_API_MAP_KEY")
+        if not api_key:
+            raise HTTPException(status_code=500, detail="GOOGLE_API_MAP_KEY not set in environment")
+        
+        headings = np.linspace(0, 360, num_directions, endpoint=False)
+        images_list = []
+        
+        def fetch_image(heading):
+            try:
+                url = f"https://maps.googleapis.com/maps/api/streetview?size={size}&location={lat},{lon}&heading={heading}&pitch={pitch}&radius=50&key={api_key}"
+                response = requests.get(url, timeout=10)
+                if response.status_code == 200:
+                    return int(heading), Image.open(BytesIO(response.content))
+            except Exception as e:
+                print(f"  Error loading {heading}°: {e}")
+            return None, None
+        
+        print(f"Fetching {num_directions} Street View images for panorama at {lat},{lon}...")
+        
+        # Fetch all images in parallel
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            futures = [executor.submit(fetch_image, heading) for heading in headings]
+            results = []
+            for future in futures:
+                try:
+                    heading, img = future.result(timeout=15)
+                    if img:
+                        results.append((heading, img))
+                        print(f"  Loaded {heading}°")
+                except Exception as e:
+                    print(f"  Failed to load image: {e}")
+        
+        if not results:
+            raise HTTPException(status_code=500, detail="Failed to fetch Street View images for this location")
+        
+        # Sort by heading and extract images
+        results.sort(key=lambda x: x[0])
+        images_list = [img for _, img in results]
+        
+        # Stitch images horizontally into panorama
+        total_width = sum(img.width for img in images_list)
+        max_height = images_list[0].height
+        
+        panorama = Image.new('RGB', (total_width, max_height))
+        x_offset = 0
+        for img in images_list:
+            panorama.paste(img, (x_offset, 0))
+            x_offset += img.width
+        
+        # Save panorama
+        panorama_id = str(uuid.uuid4())
+        panorama_path = f"{UPLOAD_DIR}/panorama_{panorama_id}.png"
+        panorama.save(panorama_path)
+        
+        print(f"✓ Panorama generated: {panorama_path} ({total_width}x{max_height})")
+        
+        return {
+            "panorama_path": panorama_path,
+            "panorama_id": panorama_id,
+            "dimensions": f"{total_width}x{max_height}",
+            "location": f"{lat},{lon}",
+            "message": "Panorama generated successfully. Use this path with /create-sustainability-chat"
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generating panorama: {str(e)}")
+
 
 @app.post("/create-sustainability-chat")
 def create_sustainability_chat(request: ChatRequest) -> ChatResponse:
