@@ -1,0 +1,394 @@
+'use client';
+
+import { useEffect, useRef, useState } from 'react';
+import Map, { MapRef, Layer, type MapMouseEvent } from 'react-map-gl/mapbox';
+import { getRegionData, RegionData } from '@/lib/api';
+import 'mapbox-gl/dist/mapbox-gl.css';
+
+// GTA bounds
+const GTA_CENTER: [number, number] = [-79.4, 43.7];
+const GTA_BOUNDS: [[number, number], [number, number]] = [
+  [-80.0, 43.4],  // Southwest
+  [-78.8, 44.1]   // Northeast
+];
+
+interface MapPoint {
+  lat: number;
+  lon: number;
+  name: string;
+  address?: string;
+}
+
+export default function Map3D() {
+  const mapRef = useRef<MapRef>(null);
+  const [selectedPoint, setSelectedPoint] = useState<MapPoint | null>(null);
+  const [regionData, setRegionData] = useState<RegionData | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchSuggestions, setSearchSuggestions] = useState<any[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [viewport, setViewport] = useState({
+    latitude: GTA_CENTER[1],
+    longitude: GTA_CENTER[0],
+    zoom: 10,
+    pitch: 45,  // Tilted view
+    bearing: 0,
+    minZoom: 9,   // Prevent zooming out too far
+    maxZoom: 18,  // Max zoom level
+  });
+
+  // Initial fly-to animation
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      mapRef.current?.flyTo({
+        center: GTA_CENTER,
+        zoom: 10,
+        pitch: 45,
+        duration: 2000,
+        essential: true,
+      });
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, []);
+
+  // Search for addresses (forward geocoding)
+  const searchAddress = async (query: string) => {
+    if (!query || query.length < 3) {
+      setSearchSuggestions([]);
+      return;
+    }
+
+    try {
+      const response = await fetch(
+        `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query)}.json?` +
+        `access_token=${process.env.NEXT_PUBLIC_MAPBOX_TOKEN}&` +
+        `bbox=${GTA_BOUNDS[0][0]},${GTA_BOUNDS[0][1]},${GTA_BOUNDS[1][0]},${GTA_BOUNDS[1][1]}&` +
+        `limit=5`
+      );
+
+      if (!response.ok) {
+        throw new Error('Search failed');
+      }
+
+      const data = await response.json();
+      setSearchSuggestions(data.features || []);
+      setShowSuggestions(true);
+    } catch (error) {
+      console.error('Error searching address:', error);
+      setSearchSuggestions([]);
+    }
+  };
+
+  // Handle search input change
+  const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    setSearchQuery(value);
+    searchAddress(value);
+  };
+
+  // Handle selecting a search result
+  const handleSelectAddress = async (feature: any) => {
+    const [lng, lat] = feature.center;
+    const address = feature.place_name;
+
+    setSearchQuery(address);
+    setShowSuggestions(false);
+    setLoading(true);
+
+    setSelectedPoint({
+      lat,
+      lon: lng,
+      name: address,
+      address: address,
+    });
+
+    try {
+      const data = await getRegionData(lat, lng, 500);
+      setRegionData(data);
+
+      // Fly to selected location
+      mapRef.current?.flyTo({
+        center: [lng, lat],
+        zoom: 14,
+        pitch: 60,
+        duration: 1500,
+        essential: true,
+      });
+    } catch (error) {
+      console.error('Error fetching region data:', error);
+      setRegionData(null);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Reverse geocode to get address from coordinates
+  const getAddressFromCoords = async (lat: number, lng: number): Promise<string> => {
+    try {
+      const response = await fetch(
+        `https://api.mapbox.com/geocoding/v5/mapbox.places/${lng},${lat}.json?access_token=${process.env.NEXT_PUBLIC_MAPBOX_TOKEN}`
+      );
+      
+      if (!response.ok) {
+        throw new Error('Geocoding failed');
+      }
+      
+      const data = await response.json();
+      
+      if (data.features && data.features.length > 0) {
+        // Get the most specific address (usually the first feature)
+        return data.features[0].place_name;
+      }
+      
+      return `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+    } catch (error) {
+      console.error('Error reverse geocoding:', error);
+      return `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+    }
+  };
+
+  // Handle map click - anywhere on the map
+  const handleMapClick = async (event: MapMouseEvent) => {
+    const { lngLat } = event;
+    
+    // Check if clicked within GTA bounds
+    if (
+      lngLat.lng < GTA_BOUNDS[0][0] ||
+      lngLat.lng > GTA_BOUNDS[1][0] ||
+      lngLat.lat < GTA_BOUNDS[0][1] ||
+      lngLat.lat > GTA_BOUNDS[1][1]
+    ) {
+      console.log('Click outside GTA bounds');
+      return;
+    }
+
+    console.log('Map clicked at:', lngLat.lat, lngLat.lng);
+
+    setLoading(true);
+    
+    // Get address first
+    const address = await getAddressFromCoords(lngLat.lat, lngLat.lng);
+    
+    setSelectedPoint({
+      lat: lngLat.lat,
+      lon: lngLat.lng,
+      name: address,
+      address: address,
+    });
+
+    try {
+      const data = await getRegionData(lngLat.lat, lngLat.lng, 500);
+      setRegionData(data);
+      
+      // Fly to clicked location
+      mapRef.current?.flyTo({
+        center: [lngLat.lng, lngLat.lat],
+        zoom: 14,
+        pitch: 60,
+        duration: 1500,
+        essential: true,
+      });
+    } catch (error) {
+      console.error('Error fetching region data:', error);
+      setRegionData(null);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="relative w-full h-full">
+      {/* Search Bar */}
+      <div className="absolute top-4 left-4 z-[1000] w-80">
+        <div className="relative">
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={handleSearchChange}
+            onFocus={() => searchSuggestions.length > 0 && setShowSuggestions(true)}
+            placeholder="Search address in GTA..."
+            className="w-full px-4 py-3 bg-black/90 text-white border border-gray-700 rounded-lg focus:outline-none focus:border-gray-500 placeholder-gray-500"
+          />
+          
+          {/* Search Suggestions Dropdown */}
+          {showSuggestions && searchSuggestions.length > 0 && (
+            <div className="absolute top-full mt-2 w-full bg-black/95 border border-gray-700 rounded-lg overflow-hidden shadow-xl">
+              {searchSuggestions.map((suggestion, index) => (
+                <button
+                  key={index}
+                  onClick={() => handleSelectAddress(suggestion)}
+                  className="w-full px-4 py-3 text-left text-white hover:bg-gray-800 border-b border-gray-800 last:border-b-0 transition-colors"
+                >
+                  <div className="font-medium text-sm">{suggestion.text}</div>
+                  <div className="text-xs text-gray-400 mt-1">{suggestion.place_name}</div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <Map
+        ref={mapRef}
+        {...viewport}
+        onMove={(evt) => setViewport(evt.viewState)}
+        onClick={handleMapClick}
+        mapStyle="mapbox://styles/mapbox/dark-v11"
+        mapboxAccessToken={process.env.NEXT_PUBLIC_MAPBOX_TOKEN}
+        style={{ width: '100%', height: '100%' }}
+        maxBounds={GTA_BOUNDS}
+        maxBoundsViscosity={1.0}
+        renderWorldCopies={false}
+        antialias={true}
+      >
+        {/* 3D Buildings Layer */}
+        <Layer
+          id="3d-buildings"
+          source="composite"
+          source-layer="building"
+          filter={['==', 'extrude', 'true']}
+          type="fill-extrusion"
+          minzoom={13}
+          paint={{
+            'fill-extrusion-color': '#3a3a3a',
+            'fill-extrusion-height': [
+              'interpolate',
+              ['linear'],
+              ['zoom'],
+              13,
+              0,
+              13.05,
+              ['get', 'height'],
+            ],
+            'fill-extrusion-base': [
+              'interpolate',
+              ['linear'],
+              ['zoom'],
+              13,
+              0,
+              13.05,
+              ['get', 'min_height'],
+            ],
+            'fill-extrusion-opacity': 0.8,
+          }}
+        />
+      </Map>
+
+      {loading && (
+        <div className="absolute top-4 right-4 z-[1000] bg-black text-white px-4 py-2 rounded">
+          Loading data...
+        </div>
+      )}
+
+      {/* Info Panel */}
+      {regionData && selectedPoint && (
+        <div className="absolute top-4 right-4 bg-black text-white p-4 rounded-lg shadow-xl z-[1000] max-w-md max-h-[80vh] overflow-y-auto">
+          <div className="flex justify-between items-start mb-4">
+            <div>
+              <h2 className="text-lg font-bold">{selectedPoint.address || 'Analysis Results'}</h2>
+              <p className="text-sm text-gray-300">
+                {selectedPoint.lat.toFixed(4)}, {selectedPoint.lon.toFixed(4)}
+              </p>
+            </div>
+            <button
+              onClick={() => {
+                setSelectedPoint(null);
+                setRegionData(null);
+                setSearchQuery('');
+                mapRef.current?.flyTo({
+                  center: GTA_CENTER,
+                  zoom: 10,
+                  pitch: 45,
+                  duration: 1500,
+                });
+              }}
+              className="text-gray-300 hover:text-white text-xl"
+            >
+              ×
+            </button>
+          </div>
+
+          <div className="space-y-3 text-sm">
+            {/* Nearest Green Space */}
+            <div>
+              <p className="text-gray-400">Nearest Green Space:</p>
+              {regionData.nearby_data.green_spaces && regionData.nearby_data.green_spaces.length > 0 ? (
+                <p className="font-medium text-white">
+                  {regionData.nearby_data.green_spaces[0].name}
+                  <span className="text-gray-400 text-xs ml-2">
+                    ({(regionData.nearby_data.green_spaces[0].distance / 1000).toFixed(2)} km)
+                  </span>
+                </p>
+              ) : (
+                <p className="text-gray-500 text-xs">None nearby</p>
+              )}
+            </div>
+
+            {/* Nearest Environmental Area */}
+            <div>
+              <p className="text-gray-400">Nearest Environmental Area:</p>
+              {regionData.nearby_data.environmental_areas && regionData.nearby_data.environmental_areas.length > 0 ? (
+                <p className="font-medium text-white">
+                  {regionData.nearby_data.environmental_areas[0].name}
+                  <span className="text-gray-400 text-xs ml-2">
+                    ({(regionData.nearby_data.environmental_areas[0].distance / 1000).toFixed(2)} km)
+                  </span>
+                </p>
+              ) : (
+                <p className="text-gray-500 text-xs">None nearby</p>
+              )}
+            </div>
+
+            {/* Nearest First Nation */}
+            <div>
+              <p className="text-gray-400">Nearest First Nation:</p>
+              {regionData.nearest_first_nation ? (
+                <p className="font-medium text-white">
+                  {regionData.nearest_first_nation.name}
+                  <span className="text-gray-400 text-xs ml-2">
+                    ({(regionData.nearest_first_nation.distance / 1000).toFixed(2)} km)
+                  </span>
+                </p>
+              ) : (
+                <p className="text-gray-500 text-xs">None nearby</p>
+              )}
+            </div>
+
+            <div className="border-t border-gray-700 pt-3 mt-3">
+              {/* Indigenous Territory */}
+              <div>
+                <p className="text-gray-400">Indigenous Territory:</p>
+                {regionData.indigenous_territory ? (
+                  <p className="font-medium text-white">{regionData.indigenous_territory.name}</p>
+                ) : (
+                  <p className="text-gray-500 text-xs">Not in a territory</p>
+                )}
+              </div>
+
+              {/* Treaties */}
+              <div className="mt-3">
+                <p className="text-gray-400">Treaties:</p>
+                {regionData.nearby_data.indigenous_treaties && regionData.nearby_data.indigenous_treaties.length > 0 ? (
+                  <p className="font-medium text-white">{regionData.nearby_data.indigenous_treaties[0].name}</p>
+                ) : (
+                  <p className="text-gray-500 text-xs">Not in a treaty area</p>
+                )}
+              </div>
+
+              {/* Languages */}
+              <div className="mt-3">
+                <p className="text-gray-400">Indigenous Language:</p>
+                {regionData.nearby_data.indigenous_languages && regionData.nearby_data.indigenous_languages.length > 0 ? (
+                  <p className="font-medium text-white">{regionData.nearby_data.indigenous_languages[0].name}</p>
+                ) : (
+                  <p className="text-gray-500 text-xs">Not in a language region</p>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

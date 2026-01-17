@@ -2,12 +2,12 @@
 
 import dynamic from 'next/dynamic';
 
-// Dynamic import to avoid SSR issues with Leaflet
-const Map = dynamic(() => import('@/components/Map'), {
+// Dynamic import for Mapbox GL 3D map
+const Map3D = dynamic(() => import('@/components/Map3D'), {
   ssr: false,
   loading: () => (
-    <div className="w-full h-screen flex items-center justify-center">
-      <p>Loading map...</p>
+    <div className="w-full h-screen flex items-center justify-center bg-gray-900 text-white">
+      <p>Loading 3D map...</p>
     </div>
   ),
 });
@@ -15,7 +15,7 @@ const Map = dynamic(() => import('@/components/Map'), {
 export default function Home() {
   return (
     <main className="h-screen">
-      <Map />
+      <Map3D />
     </main>
   );
 }
