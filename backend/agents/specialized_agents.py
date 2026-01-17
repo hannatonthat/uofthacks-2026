@@ -51,7 +51,7 @@ class SustainabilityAgent(BaseAgent):
 				model="gemini-1.5-flash"
 			)
 		except Exception as e:
-			print(f"  ⚠ Backboard initialization failed: {e}")
+			print(f"  [!] Backboard initialization failed: {e}")
 			self.backboard = None
 			self.assistant_id = None
 		
@@ -105,7 +105,7 @@ class SustainabilityAgent(BaseAgent):
 		)
 
 	def run_full_analysis(self, image_path: str, context: str = "", vision_output_path: str = None) -> Dict[str, Any]:
-		"""Run analyze → redesign → vision via LangGraph when available, else sequential fallback."""
+		"""Run analyze -> redesign -> vision via LangGraph when available, else sequential fallback."""
 		try:
 			from langgraph.graph import StateGraph, END
 			
@@ -270,7 +270,7 @@ class SustainabilityAgent(BaseAgent):
 				generated_image = Image.open(BytesIO(image_bytes))
 				generated_image.save(out_path)
 				image_size = os.path.getsize(out_path)
-				print(f"  ✓ Sustainable vision generated: {out_path} ({image_size} bytes)")
+				print(f"  [OK] Sustainable vision generated: {out_path} ({image_size} bytes)")
 				
 				# Clean up temp file if created
 				if image_path != image_to_process and os.path.exists("temp_image.png"):
@@ -387,10 +387,10 @@ class IndigenousContextAgent(BaseAgent):
 				system_prompt=system_prompt,
 				model="claude-3-5-sonnet"
 			)
-			print(f"✓ Backboard Claude assistant created: {self.assistant_id}")
+			print(f"[OK] Backboard Claude assistant created: {self.assistant_id}")
 		except Exception as e:
 			# Print warning but continue (will use local fallback in chat_with_context)
-			print(f"⚠ Backboard initialization failed: {e}")
+			print(f"[!] Backboard initialization failed: {e}")
 			print(f"  Will use local fallback for responses")
 
 	def chat_with_context(self, user_query: str) -> str:
@@ -592,9 +592,12 @@ class ProposalWorkflowAgent(BaseAgent):
 				system_prompt=system_prompt,
 				model="gpt-4o-mini"
 			)
-			print(f"✓ Backboard assistant created for ProposalWorkflowAgent: {self.assistant_id}")
+			print(f"[OK] Backboard assistant created for ProposalWorkflowAgent: {self.assistant_id}")
 		except Exception as e:
-			print(f"⚠ Backboard initialization failed for ProposalWorkflowAgent: {e}")
+			print(f"[!] Backboard initialization failed for ProposalWorkflowAgent: {e}")
+		
+		# Thread tracking for conversation history
+		self.thread_id: Optional[str] = None
 		
 		# Submission progress tracker
 		self._submission_status: Dict[str, Any] = {
@@ -762,3 +765,46 @@ class ProposalWorkflowAgent(BaseAgent):
 		  print(f"Progress: {status['step']}/{status['total_steps']}")
 		"""
 		return self._submission_status
+
+	def chat_with_context(self, user_query: str) -> str:
+		"""
+		MAIN ENTRY POINT: Chat with proposal workflow expert via Backboard.
+		
+		PROCESS:
+		  1. If Backboard initialized: use Claude/GPT to answer workflow questions
+		  2. If Backboard not available: return error
+		
+		PARAMETERS:
+		  user_query: User's question about workflow, contacts, or next steps
+		             Example: "What are the workflow steps for British Columbia?"
+		
+		RETURNS:
+		  Claude/GPT response string (or error message)
+		
+		THREAD MANAGEMENT:
+		  - Thread created automatically on first call
+		  - Subsequent calls reuse thread for conversation history
+		  - Full history maintained server-side by Backboard
+		
+		EXAMPLE USAGE:
+		  agent.chat_with_context("What are the submission steps?")
+		  agent.chat_with_context("How do I write an outreach email?")
+		"""
+		if self.backboard and self.assistant_id:
+			try:
+				# Use Backboard to chat with the model
+				response, thread_id = self.backboard.chat(
+					self.assistant_id,
+					user_query,
+					getattr(self, 'thread_id', None)
+				)
+				self.thread_id = thread_id
+				self.add_message("user", user_query)
+				self.add_message("assistant", response)
+				return response
+			except Exception as e:
+				raise RuntimeError(f"Backboard API error: {e}")
+		else:
+			raise RuntimeError(
+				"Backboard not initialized. Ensure BACKBOARD_API_KEY is set in .env"
+			)

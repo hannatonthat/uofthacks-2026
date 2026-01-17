@@ -4,6 +4,7 @@ UofTHacks 2026
 """
 from fastapi import FastAPI, HTTPException, Query, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional
 from datetime import datetime
@@ -54,6 +55,9 @@ app.add_middleware(
 threads: Dict[str, Dict] = {}
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+# Mount static files directory to serve uploaded images
+app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
 
 # Pydantic models for request/response
@@ -463,7 +467,12 @@ def create_chat(request: ChatRequest) -> ChatResponse:
     agent.add_message("user", user_message)
 
     try:
-        response = agent.chat_with_context(user_message, context="")
+        # Call appropriate chat method based on agent type
+        if request.agent.lower() == "sustainability":
+            response = agent.chat_with_context(user_message, context="")
+        else:
+            # Indigenous and Proposal agents don't accept context parameter
+            response = agent.chat_with_context(user_message)
     except Exception as e:
         response = f"Agent initialized but model call failed: {str(e)}"
 
@@ -670,7 +679,7 @@ def generate_panorama(
         panorama_path = f"{UPLOAD_DIR}/panorama_{panorama_id}.png"
         panorama.save(panorama_path)
         
-        print(f"✓ Panorama generated: {panorama_path} ({total_width}x{max_height})")
+        print(f"[OK] Panorama generated: {panorama_path} ({total_width}x{max_height})")
         
         return {
             "panorama_path": panorama_path,
@@ -747,7 +756,7 @@ def generate_panorama(
         panorama_path = f"{UPLOAD_DIR}/panorama_{panorama_id}.png"
         panorama.save(panorama_path)
         
-        print(f"✓ Panorama generated: {panorama_path} ({total_width}x{max_height})")
+        print(f"[OK] Panorama generated: {panorama_path} ({total_width}x{max_height})")
         
         return {
             "panorama_path": panorama_path,
@@ -877,8 +886,8 @@ def add_sustainability_chat(threadid: str = Query(...), request: ChatRequest = N
 # Run server
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.getenv("PORT", 8000))
-    host = os.getenv("HOST", "0.0.0.0")
+    port = int(os.getenv("PORT", 8001))
+    host = os.getenv("HOST", "127.0.0.1")  # Use localhost instead of 0.0.0.0 for Windows compatibility
     
     uvicorn.run(
         "main:app",

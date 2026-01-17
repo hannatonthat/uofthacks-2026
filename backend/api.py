@@ -8,6 +8,8 @@ import uuid
 import os
 import shutil
 
+from agents import SustainabilityAgent, IndigenousContextAgent, ProposalWorkflowAgent
+
 app = FastAPI(title="Agents API", version="1.0.0")
 
 # Enable CORS for frontend access

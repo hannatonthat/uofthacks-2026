@@ -55,6 +55,33 @@ export interface MapPoint {
   type: string;
 }
 
+export interface PanoramaData {
+  panorama_path: string;
+  panorama_id: string;
+  dimensions: string;
+  location: string;
+  message: string;
+}
+
+export interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+export interface ChatResponse {
+  thread_id: string;
+  agent: string;
+  user_message: string;
+  assistant_response: string;
+}
+
+export interface ThreadHistory {
+  thread_id: string;
+  agent: string;
+  image_path?: string;
+  conversation_history: ChatMessage[];
+}
+
 /**
  * Get sample of interesting locations to display on map
  * NOTE: Not used in 3D map - kept for legacy 2D map compatibility
@@ -156,6 +183,92 @@ export async function logEvent(
   
   if (!response.ok) {
     console.error('Failed to log event:', response.statusText);
+  }
+  
+  return response.json();
+}
+
+/**
+ * Generate panorama image from Street View at location
+ */
+export async function generatePanorama(
+  lat: number,
+  lon: number,
+  numDirections: number = 4
+): Promise<PanoramaData> {
+  const response = await fetch(
+    `${API_BASE_URL}/generate-panorama?lat=${lat}&lon=${lon}&num_directions=${numDirections}`
+  );
+  
+  if (!response.ok) {
+    throw new Error(`Failed to generate panorama: ${response.statusText}`);
+  }
+  
+  return response.json();
+}
+
+/**
+ * Create a new agent chat thread
+ */
+export async function createAgentChat(
+  agent: 'sustainability' | 'indigenous' | 'proposal',
+  message?: string,
+  imagePath?: string
+): Promise<ChatResponse> {
+  const response = await fetch(`${API_BASE_URL}/create-chat`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      agent,
+      message,
+      image_path: imagePath,
+    }),
+  });
+  
+  if (!response.ok) {
+    throw new Error(`Failed to create agent chat: ${response.statusText}`);
+  }
+  
+  return response.json();
+}
+
+/**
+ * Send message to existing agent chat thread
+ */
+export async function sendAgentMessage(
+  threadId: string,
+  message: string
+): Promise<ChatResponse> {
+  const response = await fetch(
+    `${API_BASE_URL}/start-chat?threadid=${threadId}`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        message,
+      }),
+    }
+  );
+  
+  if (!response.ok) {
+    throw new Error(`Failed to send message: ${response.statusText}`);
+  }
+  
+  return response.json();
+}
+
+/**
+ * Get conversation history for a thread
+ */
+export async function getThreadHistory(threadId: string): Promise<ThreadHistory> {
+  const response = await fetch(`${API_BASE_URL}/thread/${threadId}`);
+  
+  if (!response.ok) {
+    throw new Error(`Failed to get thread history: ${response.statusText}`);
   }
   
   return response.json();

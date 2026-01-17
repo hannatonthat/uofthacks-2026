@@ -2,7 +2,8 @@
 
 import { useEffect, useRef, useState } from 'react';
 import Map, { MapRef, Layer, type MapMouseEvent } from 'react-map-gl/mapbox';
-import { getRegionData, RegionData } from '@/lib/api';
+import { getRegionData, RegionData, generatePanorama } from '@/lib/api';
+import AgentModal from './AgentModal';
 import 'mapbox-gl/dist/mapbox-gl.css';
 
 // GTA bounds
@@ -27,6 +28,9 @@ export default function Map3D() {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchSuggestions, setSearchSuggestions] = useState<any[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
+  const [panoramaPath, setPanoramaPath] = useState<string | null>(null);
+  const [panoramaLoading, setPanoramaLoading] = useState(false);
+  const [agentModalOpen, setAgentModalOpen] = useState(false);
   const [viewport, setViewport] = useState({
     latitude: GTA_CENTER[1],
     longitude: GTA_CENTER[0],
@@ -121,6 +125,19 @@ export default function Map3D() {
     } finally {
       setLoading(false);
     }
+
+    // Generate panorama in parallel
+    setPanoramaLoading(true);
+    try {
+      const panoramaData = await generatePanorama(lat, lng);
+      setPanoramaPath(panoramaData.panorama_path);
+      console.log('Panorama generated:', panoramaData);
+    } catch (error) {
+      console.error('Panorama generation failed:', error);
+      setPanoramaPath(null);
+    } finally {
+      setPanoramaLoading(false);
+    }
   };
 
   // Reverse geocode to get address from coordinates
@@ -194,6 +211,19 @@ export default function Map3D() {
       setRegionData(null);
     } finally {
       setLoading(false);
+    }
+
+    // Generate panorama in parallel (don't wait for region data)
+    setPanoramaLoading(true);
+    try {
+      const panoramaData = await generatePanorama(lngLat.lat, lngLat.lng);
+      setPanoramaPath(panoramaData.panorama_path);
+      console.log('Panorama generated:', panoramaData);
+    } catch (error) {
+      console.error('Panorama generation failed:', error);
+      setPanoramaPath(null);
+    } finally {
+      setPanoramaLoading(false);
     }
   };
 
@@ -308,6 +338,24 @@ export default function Map3D() {
               ×
             </button>
           </div>
+
+          {/* Panorama Preview */}
+          {panoramaLoading ? (
+            <div className="mb-4 bg-gray-800 border border-gray-700 rounded-lg p-4 flex items-center justify-center">
+              <div className="flex items-center gap-3">
+                <div className="animate-spin rounded-full h-5 w-5 border-2 border-white border-t-transparent"></div>
+                <span className="text-sm text-gray-300">Generating panorama...</span>
+              </div>
+            </div>
+          ) : panoramaPath ? (
+            <div className="mb-4 border border-gray-700 rounded-lg overflow-hidden">
+              <img 
+                src={`http://localhost:8001/${panoramaPath}`}
+                alt="Street View Panorama"
+                className="w-full h-32 object-cover"
+              />
+            </div>
+          ) : null}
 
           <div className="space-y-3 text-sm">
             {/* Nearest Green Space */}
@@ -462,9 +510,32 @@ export default function Map3D() {
                 </div>
               </div>
             )}
+
+            {/* AI Agents Button */}
+            <div className="border-t border-gray-700 pt-3 mt-3">
+              <button
+                onClick={() => setAgentModalOpen(true)}
+                className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3 px-4 rounded-lg font-medium transition-colors"
+              >
+                Open AI Agents
+              </button>
+            </div>
           </div>
         </div>
       )}
+
+      {/* Agent Modal */}
+      <AgentModal
+        isOpen={agentModalOpen}
+        onClose={() => setAgentModalOpen(false)}
+        panoramaPath={panoramaPath}
+        locationData={selectedPoint ? {
+          lat: selectedPoint.lat,
+          lon: selectedPoint.lon,
+          address: selectedPoint.address || selectedPoint.name,
+          territory: regionData?.indigenous_territory?.name
+        } : null}
+      />
     </div>
   );
 }

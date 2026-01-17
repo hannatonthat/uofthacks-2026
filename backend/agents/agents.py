@@ -351,16 +351,16 @@ class AgentOrchestrator:
 
 	def create_sustainability_agent(self, base_prompt: str = ""):
 		"""Create a new SustainabilityAgent with optional base prompt."""
-		from specialized_agents import SustainabilityAgent
+		from .specialized_agents import SustainabilityAgent
 		return SustainabilityAgent(config=self.config, base_prompt=base_prompt)
 
 	def create_indigenous_context_agent(self, base_prompt: str = ""):
 		"""Create a new IndigenousContextAgent with optional base prompt."""
-		from specialized_agents import IndigenousContextAgent
+		from .specialized_agents import IndigenousContextAgent
 		return IndigenousContextAgent(config=self.config, base_prompt=base_prompt)
 
 	def create_proposal_workflow_agent(self, base_prompt: str = ""):
 		"""Create a new ProposalWorkflowAgent with optional base prompt."""
-		from specialized_agents import ProposalWorkflowAgent
+		from .specialized_agents import ProposalWorkflowAgent
 		return ProposalWorkflowAgent(config=self.config, base_prompt=base_prompt)
 

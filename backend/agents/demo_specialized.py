@@ -54,7 +54,7 @@ OUTPUT:
   - Sample outreach email
 """
 
-from agents import AgentConfig, AgentOrchestrator
+from agents.agents import AgentConfig, AgentOrchestrator
 import os
 import sys
 from pathlib import Path
@@ -105,12 +105,12 @@ def demo_specialized_agents(output_images: bool = False, image_dir: str = "outpu
 	# AGENT 1: SUSTAINABILITY AGENT
 	# Purpose: Full sustainability analysis pipeline with LangGraph
 	# Model: Gemini
-	# Workflow: Analyze land → Suggest redesign → Generate future vision
+	# Workflow: Analyze land -> Suggest redesign -> Generate future vision
 	# ====================================================================
 	print("\n[AGENT 1: SustainabilityAgent]")
 	print("Purpose: Full sustainability analysis pipeline with LangGraph")
 	print("Model: Gemini (via Google GenerativeAI SDK)")
-	print("Workflow: analyze → suggest_redesign → generate_future_vision\n")
+	print("Workflow: analyze -> suggest_redesign -> generate_future_vision\n")
 
 	# Create SustainabilityAgent with custom base instructions
 	sustainability = orchestrator.create_sustainability_agent(
@@ -153,7 +153,7 @@ def demo_specialized_agents(output_images: bool = False, image_dir: str = "outpu
 	# Display future vision image path
 	print(f"\nFUTURE VISION IMAGE: {result['future_vision_path']}")
 	if result.get('error'):
-		print(f"  ⚠ Pipeline note: {result['error']}")
+		print(f"  [!] Pipeline note: {result['error']}")
 	# Optional: regenerate through Gemini with extra context for indigenous architecture
 	if output_images and not result.get('error'):
 		more_context = "Integrate visible indigenous architecture elements (e.g., community longhouse motifs, natural materials) while keeping the existing layout and scale subtle and realistic."
@@ -165,9 +165,9 @@ def demo_specialized_agents(output_images: bool = False, image_dir: str = "outpu
 				regenerated_path,
 				extra_instructions=more_context,
 			)
-			print(f"  ✓ Regenerated with indigenous architecture context: {regen}")
+			print(f"  [OK] Regenerated with indigenous architecture context: {regen}")
 		except Exception as e:
-			print(f"  ⚠ Could not regenerate with indigenous architecture context: {e}")
+			print(f"  [!] Could not regenerate with indigenous architecture context: {e}")
 
 	
 
@@ -175,13 +175,13 @@ def demo_specialized_agents(output_images: bool = False, image_dir: str = "outpu
 	# AGENT 2: INDIGENOUS CONTEXT AGENT
 	# Purpose: Multi-turn indigenous perspectives conversation
 	# Model: Claude (via Backboard.io)
-	# Workflow: Chat with context → Add proposal sections → Build document
+	# Workflow: Chat with context -> Add proposal sections -> Build document
 	# ====================================================================
 	print("\n" + "=" * 70)
 	print("[AGENT 2: IndigenousContextAgent]")
 	print("Purpose: Provide indigenous context, build proposal documents")
 	print("Model: Claude (via Backboard.io REST API)")
-	print("Workflow: Multi-turn chat → Incremental proposal building\n")
+	print("Workflow: Multi-turn chat -> Incremental proposal building\n")
 
 	# Create IndigenousContextAgent with regional context
 	indigenous = orchestrator.create_indigenous_context_agent(
@@ -207,13 +207,13 @@ def demo_specialized_agents(output_images: bool = False, image_dir: str = "outpu
 		"Project Overview",
 		"Sustainable land development respecting indigenous sovereignty and ecological integrity."
 	)
-	print("  ✓ Added 'Project Overview' section")
+	print("  [OK] Added 'Project Overview' section")
 	
 	indigenous.add_proposal_section(
 		"Community Consultation",
 		"Early, respectful engagement with local tribes and land stewards."
 	)
-	print("  ✓ Added 'Community Consultation' section\n")
+	print("  [OK] Added 'Community Consultation' section\n")
 
 	# Export proposal document
 	print("GENERATED PROPOSAL DOCUMENT (excerpt):")
@@ -225,13 +225,13 @@ def demo_specialized_agents(output_images: bool = False, image_dir: str = "outpu
 	# AGENT 3: PROPOSAL WORKFLOW AGENT
 	# Purpose: Submission workflow management and outreach
 	# Model: OpenAI (via OpenAI SDK)
-	# Workflow: Get workflow steps → Manage contacts → Generate emails
+	# Workflow: Get workflow steps -> Manage contacts -> Generate emails
 	# ====================================================================
 	print("=" * 70)
 	print("[AGENT 3: ProposalWorkflowAgent]")
 	print("Purpose: Manage submission workflow, contacts, email outreach")
 	print("Model: OpenAI (gpt-4o-mini)")
-	print("Workflow: Workflow steps → Contact management → Email generation\n")
+	print("Workflow: Workflow steps -> Contact management -> Email generation\n")
 
 	# Create ProposalWorkflowAgent with outreach guidelines
 	workflow = orchestrator.create_proposal_workflow_agent(
@@ -257,7 +257,7 @@ def demo_specialized_agents(output_images: bool = False, image_dir: str = "outpu
 		"maria@example.com",
 		"+1-555-0101"
 	)
-	print("  ✓ Added Chief Maria Smith")
+	print("  [OK] Added Chief Maria Smith")
 	
 	print("  Adding environmental coordinator...")
 	workflow.add_contact(
@@ -265,7 +265,7 @@ def demo_specialized_agents(output_images: bool = False, image_dir: str = "outpu
 		"Indigenous Land Stewardship Coordinator",
 		"james@example.com"
 	)
-	print("  ✓ Added Dr. James Deer")
+	print("  [OK] Added Dr. James Deer")
 	
 	contacts = workflow.get_contacts()
 	print(f"\nTOTAL CONTACTS: {len(contacts)}")
@@ -296,11 +296,11 @@ def demo_specialized_agents(output_images: bool = False, image_dir: str = "outpu
 	print("DEMO COMPLETE")
 	print("=" * 70)
 	print("\nKEY TAKEAWAYS:")
-	print("  ✓ SustainabilityAgent: 3-node LangGraph pipeline for full analysis")
-	print("  ✓ IndigenousContextAgent: Thread-based conversation persistence")
-	print("  ✓ ProposalWorkflowAgent: 10-step workflow with email generation")
-	print("  ✓ All agents: Memory system (_prompt + _history)")
-	print("  ✓ Ready for FastAPI integration and database persistence")
+	print("  [OK] SustainabilityAgent: 3-node LangGraph pipeline for full analysis")
+	print("  [OK] IndigenousContextAgent: Thread-based conversation persistence")
+	print("  [OK] ProposalWorkflowAgent: 10-step workflow with email generation")
+	print("  [OK] All agents: Memory system (_prompt + _history)")
+	print("  [OK] Ready for FastAPI integration and database persistence")
 	
 	# Verify image output if requested
 	if output_images:
@@ -308,10 +308,10 @@ def demo_specialized_agents(output_images: bool = False, image_dir: str = "outpu
 		vision_path = os.path.join(image_dir, "future_vision.png")
 		if os.path.exists(vision_path):
 			size = os.path.getsize(vision_path)
-			print(f"  ✓ Future vision image saved: {vision_path}")
-			print(f"  ✓ File size: {size} bytes")
+			print(f"  [OK] Future vision image saved: {vision_path}")
+			print(f"  [OK] File size: {size} bytes")
 		else:
-			print(f"  ✗ Image not found at {vision_path}")
+			print(f"  [X] Image not found at {vision_path}")
 
 
 if __name__ == "__main__":
