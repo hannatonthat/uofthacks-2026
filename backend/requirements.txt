@@ -1,0 +1,14 @@
+python-dotenv>=1.0.0
+Pillow>=10.0.0
+
+# LangGraph for workflow planning
+langgraph>=0.2.0
+
+# OpenAI (optional, used when you set API keys)
+openai>=1.3.0
+
+# If you plan to try Gemini planning via google-generativeai
+google-generativeai>=0.7.0
+
+# Claude (Anthropic) support
+anthropic>=0.25.0
