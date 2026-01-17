@@ -131,7 +131,7 @@ export default function Map3D() {
     // Generate panorama in parallel
     setPanoramaLoading(true);
     try {
-      const panoramaData = await generatePanorama(lat, lng);
+      const panoramaData = await generatePanorama(lat, lng, 4);
       setPanoramaPath(panoramaData.panorama_path);
       console.log('Panorama generated:', panoramaData);
     } catch (error) {
@@ -218,7 +218,7 @@ export default function Map3D() {
     // Generate panorama in parallel (don't wait for region data)
     setPanoramaLoading(true);
     try {
-      const panoramaData = await generatePanorama(lngLat.lat, lngLat.lng);
+      const panoramaData = await generatePanorama(lngLat.lat, lngLat.lng, 4);
       setPanoramaPath(panoramaData.panorama_path);
       console.log('Panorama generated:', panoramaData);
     } catch (error) {
@@ -356,9 +356,12 @@ export default function Map3D() {
                 className="w-full border border-gray-700 rounded-lg overflow-hidden hover:border-gray-500 transition-all group cursor-pointer"
               >
                 <img 
-                  src={`http://localhost:8001/${panoramaPath}`}
+                  src={`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/${panoramaPath}`}
                   alt="Street View Panorama"
                   className="w-full h-32 object-cover group-hover:scale-105 transition-transform duration-300"
+                  onError={(e) => {
+                    console.error('Failed to load panorama thumbnail:', e);
+                  }}
                 />
               </button>
               <p className="text-xs text-gray-400 mt-2 text-center">Click to explore in 360°</p>
