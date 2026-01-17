@@ -6,6 +6,7 @@ import os
 from typing import List, Optional, Dict, Any, TypedDict
 from agents import BaseAgent, AgentConfig
 from backboard_provider import BackboardProvider
+from prompts_config import get_prompt, get_all_constraints
 
 
 class SustainabilityAgent(BaseAgent):
@@ -25,8 +26,17 @@ class SustainabilityAgent(BaseAgent):
 	def __init__(self, name: str = "sustainability-agent", config: Optional[AgentConfig] = None, base_prompt: str = ""):
 		"""Init sustainability agent, wire Backboard Gemini assistant, cache prompts."""
 		super().__init__(name, config)
+		
+		# Load prompts from centralized config
+		loaded_base_prompt = get_prompt("sustainability_agent", "base_prompt")
+		
+		# Use provided base_prompt, fall back to loaded, or use default
 		if base_prompt:
 			self.set_prompt(base_prompt)
+		elif loaded_base_prompt:
+			self.set_prompt(loaded_base_prompt)
+		else:
+			self.set_prompt("Honor indigenous land stewardship practices. Prioritize water systems, biodiversity, and cultural significance.")
 		
 		# Initialize Backboard provider for unified LLM access
 		try:
@@ -133,16 +143,19 @@ class SustainabilityAgent(BaseAgent):
 
 	def suggest_sustainable_redesign(self, analysis_context: str) -> List[str]:
 		"""Ask Backboard/Gemini for 5 redesign suggestions using base prompt + analysis."""
-		# Build prompt from memory system
+		# Load redesign suggestions prompt from config
+		redesign_prompt = get_prompt("sustainability_agent", "redesign_suggestions_prompt")
+		if not redesign_prompt:
+			redesign_prompt = "Generate 5 specific, actionable sustainable redesign suggestions that respect indigenous land use practices. Focus on water systems, native vegetation, wildlife corridors, and cultural significance. Format as a numbered list."
+		
+		# Build prompt from memory system + loaded prompt
 		prompt = f"""
 		{self._prompt}
 		
 		Based on this land analysis:
 		{analysis_context}
 		
-		Generate 5 specific, actionable sustainable redesign suggestions that respect indigenous land use practices.
-		Focus on water systems, native vegetation, wildlife corridors, and cultural significance.
-		Format as a numbered list.
+		{redesign_prompt}
 		"""
 		
 		try:
@@ -189,28 +202,12 @@ class SustainabilityAgent(BaseAgent):
 		input_image = Image.open(image_to_process)
 		print(f"  ℹ Generating sustainable vision with Gemini 2.5 Flash Image...")
 		
-		# Subtle enhancement prompt - keep the landscape mostly the same, add sustainable features
-		prompt = """Enhance this image by adding subtle sustainable and ecological improvements while keeping the overall layout and structure recognizable:
-
-SUBTLE ADDITIONS (keep existing features, add these):
-• Add bike lanes marked on roads - painted clearly but not intrusive
-• Plant trees strategically along streets and open areas (20-30% more greenery, not overwhelming)
-• Add small community gardens or green spaces in unused areas
-• Increase water features modestly - small pond or rain garden if space allows
-• Add green roofs or solar panels on existing buildings (visible but not dominating)
-• Place benches and small parks in empty spaces
-• Plant native vegetation and flowers in landscaping areas
-• Add small walking/pedestrian paths through available spaces
-• Improve visibility of any existing water features
-
-IMPORTANT CONSTRAINTS:
-• Keep the existing buildings, roads, and general structure recognizable and mostly unchanged
-• The image should look like subtle improvements to the existing location, not a complete redesign
-• Maintain the same perspective and scale as the original
-• Make it look like realistic, achievable improvements you could implement in 5-10 years
-• The overall composition should be very similar to the original, just enhanced
-
-STYLE: Photorealistic, maintain existing colors and lighting, just show what this space could look like with thoughtful sustainable enhancements."""
+		# Load image generation prompt from centralized config
+		prompt = get_prompt("sustainability_agent", "future_vision_image_prompt")
+		if not prompt:
+			# Fallback to basic prompt if config not loaded
+			prompt = "Enhance this image by adding subtle sustainable and ecological improvements while keeping the overall layout and structure recognizable."
+		
 		if extra_instructions.strip():
 			prompt += f"\n\nEXTRA REQUESTS:\n{extra_instructions.strip()}\n"
 		
@@ -301,8 +298,17 @@ class IndigenousContextAgent(BaseAgent):
 		  This allows development/testing without API key.
 		"""
 		super().__init__(name, config)
+		
+		# Load prompts from centralized config
+		loaded_base_prompt = get_prompt("indigenous_context_agent", "base_prompt")
+		
+		# Use provided base_prompt, fall back to loaded, or use default
 		if base_prompt:
 			self.set_prompt(base_prompt)
+		elif loaded_base_prompt:
+			self.set_prompt(loaded_base_prompt)
+		else:
+			self.set_prompt("Focus on indigenous land stewardship principles. Prioritize tribal sovereignty and long-term ecological stewardship.")
 		
 		# Initialize knowledge base storage (reserved for future feature)
 		self._knowledge_base: List[Dict[str, str]] = []
@@ -319,12 +325,14 @@ class IndigenousContextAgent(BaseAgent):
 			# Create Backboard provider (handles API key loading)
 			self.backboard = BackboardProvider()
 			
+			# Load system prompt addition from config
+			system_addition = get_prompt("indigenous_context_agent", "system_prompt_addition")
+			if not system_addition:
+				system_addition = "You are an expert in indigenous land stewardship and perspectives. Provide thoughtful, respectful guidance respecting tribal sovereignty."
+			
 			# Create Claude assistant with system prompt from memory
-			# System prompt includes base_prompt (e.g., "Focus on indigenous practices")
 			system_prompt = (
-				f"You are an expert in indigenous land stewardship and perspectives. "
-				f"Provide thoughtful, respectful guidance respecting tribal sovereignty. "
-				f"{self._prompt}"
+				f"{system_addition} {self._prompt}"
 			)
 			self.assistant_id = self.backboard.create_assistant(
 				name="Indigenous Context Expert",
@@ -508,8 +516,17 @@ class ProposalWorkflowAgent(BaseAgent):
 	def __init__(self, name: str = "proposal-workflow-agent", config: Optional[AgentConfig] = None, base_prompt: str = ""):
 		"""Set prompts, init workflow tracking, and prep contacts list."""
 		super().__init__(name, config)
+		
+		# Load prompts from centralized config
+		loaded_base_prompt = get_prompt("proposal_workflow_agent", "base_prompt")
+		
+		# Use provided base_prompt, fall back to loaded, or use default
 		if base_prompt:
 			self.set_prompt(base_prompt)
+		elif loaded_base_prompt:
+			self.set_prompt(loaded_base_prompt)
+		else:
+			self.set_prompt("Ensure all outreach emphasizes community-led decision-making and respect for indigenous sovereignty.")
 		
 		# Initialize Backboard provider and assistant for email generation
 		self.backboard: Optional[BackboardProvider] = None
@@ -643,14 +660,17 @@ class ProposalWorkflowAgent(BaseAgent):
 		if not self.backboard or not self.assistant_id:
 			raise RuntimeError("Backboard not initialized. Ensure BACKBOARD_API_KEY is set in environment.")
 		
-		# PROMPT TUNING: adjust wording below to change outreach tone/content
-		prompt = (
-			f"Write a respectful, professional outreach email to {contact_name} "
-			f"requesting consultation on a sustainable land development proposal titled '{proposal_title}'. "
-			f"Emphasize indigenous sovereignty, community partnership, and respect for land stewardship. "
-			f"Keep it concise (3-4 paragraphs). "
-			f"Include subject line."
-		)
+		# Load email prompt from config
+		email_prompt_template = get_prompt("proposal_workflow_agent", "outreach_email_prompt")
+		if not email_prompt_template:
+			email_prompt_template = (
+				f"Write a respectful, professional outreach email to {{contact_name}} "
+				f"requesting consultation on a sustainable land development proposal titled '{{proposal_title}}'. "
+				f"Emphasize indigenous sovereignty, community partnership, and respect for land stewardship. "
+				f"Keep it concise (3-4 paragraphs). Include subject line."
+			)
+		
+		prompt = email_prompt_template.format(contact_name=contact_name, proposal_title=proposal_title)
 		
 		try:
 			# Use Backboard to generate email (routes to configured model)
