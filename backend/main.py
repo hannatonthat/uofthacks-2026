@@ -2,12 +2,16 @@
 FastAPI Backend for Indigenous Land Perspectives
 UofTHacks 2026
 """
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 import os
+import uuid
+import shutil
+
+from agents.specialized_agents import SustainabilityAgent, IndigenousContextAgent, ProposalWorkflowAgent
 
 from database import get_database, close_database, get_collection
 from utils.geo_queries import (
@@ -41,6 +45,12 @@ app.add_middleware(
 )
 
 
+# Thread storage for agent chats
+threads: Dict[str, Dict] = {}
+UPLOAD_DIR = "uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+
 # Pydantic models for request/response
 class MapClickRequest(BaseModel):
     lat: float = Field(..., ge=-90, le=90)
@@ -62,6 +72,21 @@ class UserPreferences(BaseModel):
     visited_regions: List[Dict[str, float]] = []
     favorite_territories: List[str] = []
     preferences: Dict[str, Any] = {}
+
+
+class ChatRequest(BaseModel):
+    """Request body for chat endpoints."""
+    agent: str  # "sustainability", "indigenous", "proposal"
+    message: Optional[str] = None  # Optional for create endpoints
+    image_path: Optional[str] = None  # Optional image path for sustainability agent
+
+
+class ChatResponse(BaseModel):
+    """Response body for chat endpoints."""
+    thread_id: str
+    agent: str
+    user_message: str
+    assistant_response: str
 
 
 # Startup and shutdown events
@@ -396,6 +421,292 @@ async def get_user_preferences(user_id: str):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# Agent chat endpoints (merged from api.py)
+
+@app.post("/create-chat")
+def create_chat(request: ChatRequest) -> ChatResponse:
+    """Create a new chat thread with the specified agent."""
+    thread_id = str(uuid.uuid4())
+
+    # Initialize the appropriate agent
+    if request.agent.lower() == "sustainability":
+        agent = SustainabilityAgent()
+    elif request.agent.lower() == "indigenous":
+        agent = IndigenousContextAgent()
+    elif request.agent.lower() == "proposal":
+        agent = ProposalWorkflowAgent()
+    else:
+        raise HTTPException(status_code=400, detail="Invalid agent. Use 'sustainability', 'indigenous', or 'proposal'")
+
+    # Store agent in thread storage
+    thread_data = {"agent": agent, "image_path": None}
+    threads[thread_id] = thread_data
+
+    # Use provided message or agent-specific default
+    user_message = request.message
+    if not user_message:
+        if request.agent.lower() == "sustainability":
+            user_message = "Generate initial redesign ideas"
+        elif request.agent.lower() == "indigenous":
+            user_message = "What are the key indigenous perspectives to consider?"
+        elif request.agent.lower() == "proposal":
+            user_message = "What are the steps in the proposal workflow?"
+    
+    # Send the first user message to the model immediately
+    agent.add_message("user", user_message)
+
+    try:
+        response = agent.chat_with_context(user_message, context="")
+    except Exception as e:
+        response = f"Agent initialized but model call failed: {str(e)}"
+
+    agent.add_message("assistant", response)
+
+    return ChatResponse(
+        thread_id=thread_id,
+        agent=request.agent,
+        user_message=user_message,
+        assistant_response=response,
+    )
+
+
+@app.post("/start-chat")
+def start_chat(threadid: str = Query(...), request: ChatRequest = None) -> ChatResponse:
+    """Start a new message in an existing thread."""
+    if threadid not in threads:
+        raise HTTPException(status_code=404, detail=f"Thread {threadid} not found")
+
+    if request is None:
+        raise HTTPException(status_code=400, detail="Request body required")
+
+    thread_data = threads[threadid]
+    agent = thread_data["agent"]
+    image_path = thread_data.get("image_path")
+
+    agent.add_message("user", request.message)
+    agent_name = type(agent).__name__
+
+    try:
+        if agent_name == "SustainabilityAgent":
+            context = f"Image path: {image_path}" if image_path else ""
+            response = agent.chat_with_context(request.message, context=context)
+        elif agent_name == "IndigenousContextAgent":
+            response = agent.chat_with_context(request.message)
+        elif agent_name == "ProposalWorkflowAgent":
+            response = agent.chat_with_context(request.message)
+        else:
+            response = f"Response from {agent_name}"
+    except Exception as e:
+        response = f"Error: {str(e)}"
+
+    agent.add_message("assistant", response)
+
+    return ChatResponse(
+        thread_id=threadid,
+        agent=agent_name,
+        user_message=request.message,
+        assistant_response=response,
+    )
+
+
+@app.post("/add-chat")
+def add_chat(threadid: str = Query(...), request: ChatRequest = None) -> ChatResponse:
+    """Add a message to an existing thread (alias for /start-chat)."""
+    return start_chat(threadid=threadid, request=request)
+
+
+@app.post("/upload-image")
+def upload_image(threadid: str = Query(...), file: UploadFile = File(...)):
+    """Upload an image to be used with a Sustainability agent thread."""
+    if threadid not in threads:
+        raise HTTPException(status_code=404, detail=f"Thread {threadid} not found")
+
+    thread_data = threads[threadid]
+    agent = thread_data["agent"]
+
+    if type(agent).__name__ != "SustainabilityAgent":
+        raise HTTPException(status_code=400, detail="Image upload only supported for Sustainability agent")
+
+    try:
+        file_path = f"{UPLOAD_DIR}/{threadid}_{file.filename}"
+        with open(file_path, "wb") as f:
+            shutil.copyfileobj(file.file, f)
+
+        thread_data["image_path"] = file_path
+
+        vision_path = f"{UPLOAD_DIR}/vision_{threadid}_{file.filename}"
+        agent.generate_future_vision(file_path, vision_path)
+
+        return {
+            "thread_id": threadid,
+            "status": "success",
+            "original_image": file_path,
+            "vision_image": vision_path,
+            "message": "Image uploaded and sustainable vision generated!"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error processing image: {str(e)}")
+
+
+@app.get("/threads")
+def list_threads():
+    """List all active threads."""
+    return {
+        "total_threads": len(threads),
+        "thread_ids": list(threads.keys()),
+    }
+
+
+@app.get("/thread/{threadid}")
+def get_thread(threadid: str):
+    """Get conversation history for a thread."""
+    if threadid not in threads:
+        raise HTTPException(status_code=404, detail=f"Thread {threadid} not found")
+
+    thread_data = threads[threadid]
+    agent = thread_data["agent"]
+    image_path = thread_data.get("image_path")
+
+    return {
+        "thread_id": threadid,
+        "agent": type(agent).__name__,
+        "image_path": image_path,
+        "conversation_history": getattr(agent, "_history", []),
+    }
+
+
+@app.delete("/thread/{threadid}")
+def delete_thread(threadid: str):
+    """Delete a thread."""
+    if threadid not in threads:
+        raise HTTPException(status_code=404, detail=f"Thread {threadid} not found")
+
+    thread_data = threads[threadid]
+    agent = thread_data["agent"]
+    agent_name = type(agent).__name__
+    image_path = thread_data.get("image_path")
+
+    if image_path and os.path.exists(image_path):
+        os.remove(image_path)
+
+    del threads[threadid]
+
+    return {
+        "message": f"Thread {threadid} deleted",
+        "agent": agent_name,
+    }
+
+
+# Sustainability-specific endpoints
+
+@app.post("/create-sustainability-chat")
+def create_sustainability_chat(request: ChatRequest) -> ChatResponse:
+    """Create a new sustainability chat thread and run full analysis if image provided."""
+    if request.agent.lower() != "sustainability":
+        raise HTTPException(status_code=400, detail="This endpoint is for sustainability agent only")
+    
+    thread_id = str(uuid.uuid4())
+    agent = SustainabilityAgent()
+    thread_data = {"agent": agent, "image_path": request.image_path}
+    threads[thread_id] = thread_data
+
+    # Use provided message or default
+    user_message = request.message or "Generate initial redesign ideas"
+    
+    # Send the first user message to the model immediately
+    agent.add_message("user", user_message)
+    
+    try:
+        # If image_path provided, run full analysis pipeline
+        if request.image_path:
+            vision_output_path = f"{UPLOAD_DIR}/vision_{thread_id}_generated.png"
+            analysis_result = agent.run_full_analysis(
+                request.image_path,
+                context=user_message,
+                vision_output_path=vision_output_path
+            )
+            thread_data["image_path"] = request.image_path
+            thread_data["vision_path"] = analysis_result.get("future_vision_path")
+            
+            # Build response from analysis
+            response = f"Analysis complete.\n\nSuggestions:\n" + "\n".join(
+                analysis_result.get("redesign_suggestions", [])
+            )
+        else:
+            # No image, just chat
+            context = f"Image path: {request.image_path}" if request.image_path else ""
+            response = agent.chat_with_context(user_message, context=context)
+    except Exception as e:
+        response = f"Agent initialized but model call failed: {str(e)}"
+
+    agent.add_message("assistant", response)
+
+    return ChatResponse(
+        thread_id=thread_id,
+        agent="sustainability",
+        user_message=user_message,
+        assistant_response=response,
+    )
+
+
+@app.post("/add-sustainability-chat")
+def add_sustainability_chat(threadid: str = Query(...), request: ChatRequest = None) -> ChatResponse:
+    """Add a message to an existing sustainability thread and optionally regenerate vision using latest image."""
+    if threadid not in threads:
+        raise HTTPException(status_code=404, detail=f"Thread {threadid} not found")
+
+    if request is None:
+        raise HTTPException(status_code=400, detail="Request body required")
+
+    if not request.message:
+        raise HTTPException(status_code=400, detail="message field is required for add-sustainability-chat")
+
+    thread_data = threads[threadid]
+    agent = thread_data["agent"]
+
+    if type(agent).__name__ != "SustainabilityAgent":
+        raise HTTPException(status_code=400, detail="Thread is not a sustainability agent thread")
+
+    # Override image_path if provided in request
+    if request.image_path:
+        thread_data["image_path"] = request.image_path
+    
+    # Use the latest vision image if available, otherwise use original image_path
+    image_to_use = thread_data.get("vision_path") or thread_data.get("image_path")
+
+    agent.add_message("user", request.message)
+
+    try:
+        # If image exists (original or latest vision), run full analysis pipeline
+        if image_to_use:
+            vision_output_path = f"{UPLOAD_DIR}/vision_{threadid}_{int(__import__('time').time())}.png"
+            analysis_result = agent.run_full_analysis(
+                image_to_use,
+                context=request.message,
+                vision_output_path=vision_output_path
+            )
+            thread_data["vision_path"] = analysis_result.get("future_vision_path")
+            
+            # Build response from analysis
+            response = f"Updated analysis based on: {request.message}\n\nSuggestions:\n" + "\n".join(
+                analysis_result.get("redesign_suggestions", [])
+            )
+        else:
+            # No image, just chat
+            response = agent.chat_with_context(request.message, context="")
+    except Exception as e:
+        response = f"Error: {str(e)}"
+
+    agent.add_message("assistant", response)
+
+    return ChatResponse(
+        thread_id=threadid,
+        agent="sustainability",
+        user_message=request.message,
+        assistant_response=response,
+    )
 
 
 # Helper functions removed - no AI recommendations yet

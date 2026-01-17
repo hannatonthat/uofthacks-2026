@@ -2,9 +2,10 @@
 
 import { useEffect, useState } from 'react';
 import { MapContainer, TileLayer, CircleMarker, Popup } from 'react-leaflet';
-import { LatLngExpression } from 'leaflet';
+import type { LatLngExpression } from 'leaflet';
 import { getMapPoints, getRegionData, MapPoint, RegionData } from '@/lib/api';
 import 'leaflet/dist/leaflet.css';
+import type { ReactElement } from 'react';
 
 // GTA center coordinates and bounds
 const GTA_CENTER: LatLngExpression = [43.7, -79.4];
@@ -34,7 +35,7 @@ interface GridMarkersProps {
   onPointClick: (point: MapPoint) => void;
 }
 
-function GridMarkers({ points, onPointClick }: GridMarkersProps) {
+function GridMarkers({ points, onPointClick }: GridMarkersProps): ReactElement {
   return (
     <>
       {points.map((point) => {

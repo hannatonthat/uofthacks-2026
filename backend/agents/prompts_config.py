@@ -18,8 +18,6 @@ SUBTLE ADDITIONS (keep existing features, add these):
 • Place benches and small parks in empty spaces
 • Plant native vegetation and flowers in landscaping areas
 • Add small walking/pedestrian paths through available spaces
-• Add a prominent blue butterfly landing on a flower in the foreground
-• Add a sign that says "TEST PROMPT LOADED"
 
 IMPORTANT CONSTRAINTS:
 • Keep the existing buildings, roads, and general structure recognizable and mostly unchanged
