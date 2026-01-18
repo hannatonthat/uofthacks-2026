@@ -49,7 +49,7 @@ class TestFullWorkflowWithConfirmations:
         contact1 = {
             "name": "Chief Sarah Whitebear",
             "role": "Tribal Chief",
-            "email": "tharmarajahnuthanan@gmail.com",
+            "email": "nuthanan06@gmail.com",
             "phone": "+1-555-0101"
         }
         
@@ -66,7 +66,7 @@ class TestFullWorkflowWithConfirmations:
         contact2 = {
             "name": "Elder Michael Strongheart",
             "role": "Community Elder",
-            "email": "tharmarajahnuthanan@gmail.com",
+            "email": "nuthanan06@gmail.com",
             "phone": "+1-555-0102"
         }
         
@@ -81,7 +81,7 @@ class TestFullWorkflowWithConfirmations:
         contact3 = {
             "name": "Councilor Jessica Redbear",
             "role": "Land Council Member",
-            "email": "tharmarajahnuthanan@gmail.com",
+            "email": "nuthanan06@gmail.com",
             "phone": "+1-555-0103"
         }
         

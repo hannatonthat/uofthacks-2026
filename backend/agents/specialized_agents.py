@@ -769,7 +769,7 @@ class ProposalWorkflowAgent(BaseAgent):
 		"""
 		return self._contacts
 
-	def generate_outreach_email(self, contact_name: str, proposal_title: str) -> str:
+	def generate_outreach_email(self, contact_name: str, proposal_title: str, context: str = "") -> str:
 		"""Generate a respectful outreach email via Backboard (prompt below is the tweak point)."""
 		if not self.backboard or not self.assistant_id:
 			raise RuntimeError("Backboard not initialized. Ensure BACKBOARD_API_KEY is set in environment.")
@@ -783,6 +783,10 @@ class ProposalWorkflowAgent(BaseAgent):
 				f"Emphasize indigenous sovereignty, community partnership, and respect for land stewardship. "
 				f"Keep it concise (3-4 paragraphs). Include subject line."
 			)
+		
+		# Build prompt with context if provided
+		if context:
+			email_prompt_template += f"\n\nContext from analysis:\n{context}"
 		
 		prompt = email_prompt_template.format(contact_name=contact_name, proposal_title=proposal_title)
 		

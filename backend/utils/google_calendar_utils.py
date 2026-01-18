@@ -77,6 +77,7 @@ def create_calendar_meeting(
 ) -> Optional[Dict[str, Any]]:
     """
     Create a meeting directly on Google Calendar and invite the contact.
+    Meeting is booked on nuthanan06@gmail.com calendar.
     
     Args:
         contact_name: Name of the person to invite
@@ -100,7 +101,7 @@ def create_calendar_meeting(
         start_time = start_time.replace(hour=14, minute=0, second=0, microsecond=0)
         end_time = start_time + timedelta(minutes=duration_minutes)
         
-        # Create event
+        # Create event - will be on nuthanan06@gmail.com calendar
         event = {
             'summary': event_title,
             'description': description,
@@ -113,6 +114,7 @@ def create_calendar_meeting(
                 'timeZone': 'UTC',
             },
             'attendees': [
+                {'email': 'nuthanan06@gmail.com', 'displayName': 'Event Organizer'},
                 {'email': contact_email, 'displayName': contact_name}
             ],
             'reminders': {
@@ -130,12 +132,12 @@ def create_calendar_meeting(
             }
         }
         
-        # Insert event
+        # Insert event - on primary calendar (nuthanan06@gmail.com)
         event_result = service.events().insert(
             calendarId='primary',
             body=event,
             conferenceDataVersion=1,
-            sendUpdates='all'  # Send email invitation
+            sendUpdates='all'  # Send email invitation to both
         ).execute()
         
         meeting_link = event_result.get('htmlLink')

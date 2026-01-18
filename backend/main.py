@@ -1077,6 +1077,245 @@ def generate_indigenous_proposal(request: ProposalGenerationRequest):
 		}
 
 
+@app.post("/workflow/generate-action-plan")
+def generate_workflow_action_plan(request: ProposalGenerationRequest):
+	"""
+	Generate a complete workflow action plan with contacts, emails, meetings, and notifications.
+	
+	This endpoint:
+	1. Generates an indigenous-informed proposal
+	2. Identifies key stakeholders to contact
+	3. Creates draft emails for outreach
+	4. Suggests meetings to schedule
+	5. Prepares Slack notifications for team coordination
+	6. Provides a workflow summary
+	
+	PARAMETERS:
+	  location: Geographic location/territory
+	  land_use: Type of land use or initiative
+	  objectives: Specific goals for the proposal
+	  timeframe: Duration or timeline for implementation
+	
+	RETURNS:
+	  Complete action plan with contacts, emails, meetings, and notifications
+	"""
+	try:
+		# Step 1: Generate the proposal
+		indigenous_agent = IndigenousContextAgent(
+			base_prompt="Generate respectful, indigenous-informed proposals that prioritize tribal sovereignty and land stewardship."
+		)
+		
+		context_prompt = (
+			f"Generate a comprehensive proposal for {request.land_use} "
+			f"in/at {request.location}. "
+		)
+		
+		if request.objectives:
+			context_prompt += f"Objectives: {request.objectives}. "
+		
+		if request.timeframe:
+			context_prompt += f"Timeframe: {request.timeframe}. "
+		
+		context_prompt += (
+			"The proposal should: "
+			"1. Center indigenous sovereignty and traditional land management practices "
+			"2. Include consultation with local indigenous communities "
+			"3. Respect ecological systems and sacred sites "
+			"4. Align with long-term stewardship principles "
+			"5. Include measurable outcomes that benefit both land and community. "
+			"Format as: TITLE, OVERVIEW, KEY OBJECTIVES, IMPLEMENTATION PLAN, COMMUNITY BENEFITS, MEASUREMENT & ACCOUNTABILITY"
+		)
+		
+		proposal_content = indigenous_agent.chat_with_context(context_prompt)
+		lines = proposal_content.split('\n')
+		proposal_title = lines[0].strip().replace('#', '').strip() if lines else f"{request.land_use} Initiative - {request.location}"
+		
+		# Step 2: Generate stakeholder contacts WITH emails
+		stakeholder_prompt = (
+			f"For the proposal '{proposal_title}' at {request.location}, identify 3-5 key stakeholders "
+			f"who should be consulted. For each person, provide: Role/Title, Reason for consultation, and a realistic email address. "
+			f"Focus on: Indigenous leaders, Land council members, Environmental officers, Community elders. "
+			f"Use realistic format like firstname.lastname@organization.ca or similar. "
+			f"Format as: ROLE | REASON | EMAIL (one per line)"
+		)
+		
+		stakeholder_response = indigenous_agent.chat_with_context(stakeholder_prompt)
+		
+		# Parse stakeholders with emails
+		suggested_contacts = []
+		for line in stakeholder_response.split('\n'):
+			if '|' in line:
+				parts = line.split('|')
+				if len(parts) >= 3:
+					email = parts[2].strip() if parts[2].strip() else "contact@example.com"
+					suggested_contacts.append({
+						"role": parts[0].strip(),
+						"reason": parts[1].strip(),
+						"email": email,
+						"suggested_email": email
+					})
+				elif len(parts) >= 2:
+					suggested_contacts.append({
+						"role": parts[0].strip(),
+						"reason": parts[1].strip(),
+						"email": "contact@example.com",
+						"suggested_email": "contact@example.com"
+					})
+		
+		# Step 3: Generate email drafts to nuthanan06@gmail.com (demo only)
+		workflow_agent = ProposalWorkflowAgent()
+		email_drafts = []
+		
+		# Step 3a: Gather context from sustainability and indigenous agents
+		sustainability_context = ""
+		indigenous_context = ""
+		
+		# Create sustainability agent to get context
+		try:
+			sustainability_agent = SustainabilityAgent(
+				base_prompt="Analyze this location for sustainable development opportunities."
+			)
+			sust_response = sustainability_agent.chat_with_context(
+				f"Provide key sustainability insights for {request.land_use} at {request.location} in 2-3 sentences."
+			)
+			sustainability_context = sust_response[:300] if sust_response else ""
+		except Exception as e:
+			print(f"Could not get sustainability context: {e}")
+		
+		# Create indigenous context agent to get insights
+		try:
+			indg_agent = IndigenousContextAgent(
+				base_prompt="Provide indigenous perspectives on sustainable development."
+			)
+			indg_response = indg_agent.chat_with_context(
+				f"What are the key indigenous considerations for {request.land_use} at {request.location}? 2-3 sentences."
+			)
+			indigenous_context = indg_response[:300] if indg_response else ""
+		except Exception as e:
+			print(f"Could not get indigenous context: {e}")
+		
+		# Combine contexts for email enhancement
+		combined_context = f"Sustainability insights: {sustainability_context}\nIndigenous perspectives: {indigenous_context}"
+		
+		for contact in suggested_contacts[:3]:  # Limit to 3 for demo
+			try:
+				email_content = workflow_agent.generate_outreach_email(
+					contact_name=contact['role'],
+					proposal_title=proposal_title,
+					context=combined_context
+				)
+				email_drafts.append({
+					"to": "nuthanan06@gmail.com",  # Demo: Send to your email only
+					"subject": f"Consultation Request: {proposal_title} - {contact['role']}",
+					"body": email_content,
+					"reason": contact['reason'],
+					"stakeholder_role": contact['role'],
+					"stakeholder_email": contact['email'],  # Show what it would be
+					"note": "DEMO: Sending to nuthanan06@gmail.com to avoid emailing random addresses"
+				})
+			except Exception as e:
+				print(f"Email generation skipped: {e}")
+		
+		# Step 4: Generate at least 1 meeting
+		meeting_suggestions = [
+			{
+				"title": f"Initial Consultation - {proposal_title}",
+				"description": f"Kick-off meeting to discuss {request.land_use} initiative with indigenous leaders and community representatives",
+				"attendees": [c['role'] for c in suggested_contacts[:2]],
+				"duration_minutes": 60,
+				"purpose": "Introduce proposal, gather initial feedback from key stakeholders, establish communication protocols and partnership agreements"
+			}
+		]
+		
+		# Add optional second meeting if multiple stakeholders
+		if len(suggested_contacts) > 2:
+			meeting_suggestions.append({
+				"title": f"Community Feedback Session - {proposal_title}",
+				"description": f"Open session for broader community input on {request.land_use} proposal",
+				"attendees": ["Community Members", "Elders", "Youth Representatives"],
+				"duration_minutes": 90,
+				"purpose": "Collect community perspectives, address concerns, refine proposal based on traditional knowledge and feedback"
+			})
+		
+		# Step 5: Generate Slack notifications (third component)
+		slack_notifications = [
+			{
+				"channel": "#indigenous-initiatives",
+				"message": f"📢 New Proposal Generated: {proposal_title}\n"
+						  f"Location: {request.location}\n"
+						  f"Focus: {request.land_use}\n"
+						  f"Key Stakeholders: {', '.join([c['role'] for c in suggested_contacts[:3]])}\n"
+						  f"Next Steps: Review proposal and schedule initial consultations",
+				"priority": "high"
+			},
+			{
+				"channel": "#team-planning",
+				"message": f"🤝 Team Meeting Needed\n"
+						  f"Topic: Planning outreach strategy for {proposal_title}\n"
+						  f"Stakeholders identified: {len(suggested_contacts)}\n"
+						  f"Action: Coordinate roles and timeline for community engagement",
+				"priority": "medium"
+			}
+		]
+		
+		# Step 6: Generate workflow summary
+		workflow_summary = {
+			"proposal_title": proposal_title,
+			"location": request.location,
+			"land_use": request.land_use,
+			"status": "Draft - Awaiting Community Consultation",
+			"next_steps": [
+				f"1. Review proposal content with internal team",
+				f"2. Contact {len(suggested_contacts)} identified stakeholders",
+				f"3. Schedule {len(meeting_suggestions)} consultation meetings",
+				f"4. Send {len(email_drafts)} outreach emails",
+				f"5. Post {len(slack_notifications)} team notifications",
+				f"6. Gather community feedback and iterate on proposal"
+			],
+			"timeline": request.timeframe or "To be determined based on community input",
+			"key_principles": [
+				"Indigenous sovereignty",
+				"Community-led decision making",
+				"Ecological stewardship",
+				"Cultural respect and protocols"
+			]
+		}
+		
+		return {
+			"status": "success",
+			"proposal": {
+				"title": proposal_title,
+				"content": proposal_content,
+				"location": request.location,
+				"land_use": request.land_use
+			},
+			"contacts": {
+				"count": len(suggested_contacts),
+				"suggested_stakeholders": suggested_contacts
+			},
+			"emails": {
+				"count": len(email_drafts),
+				"drafts": email_drafts
+			},
+			"meetings": {
+				"count": len(meeting_suggestions),
+				"suggested_meetings": meeting_suggestions
+			},
+			"notifications": {
+				"count": len(slack_notifications),
+				"slack_messages": slack_notifications
+			},
+			"workflow_summary": workflow_summary
+		}
+	
+	except Exception as e:
+		return {
+			"status": "error",
+			"message": f"Failed to generate action plan: {str(e)}",
+			"error": str(e)
+		}
+
+
 class ContactRequest(BaseModel):
     """Request body for adding a contact."""
     name: str
