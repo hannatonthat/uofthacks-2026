@@ -769,8 +769,8 @@ class ProposalWorkflowAgent(BaseAgent):
 		"""
 		return self._contacts
 
-	def generate_outreach_email(self, contact_name: str, proposal_title: str, context: str = "") -> str:
-		"""Generate a respectful outreach email via Backboard (prompt below is the tweak point)."""
+	def generate_outreach_email(self, contact_name: str, proposal_title: str, context: str = "", conversation_history: str = "") -> str:
+		"""Generate a unique, tailored outreach email via Backboard using conversation history."""
 		if not self.backboard or not self.assistant_id:
 			raise RuntimeError("Backboard not initialized. Ensure BACKBOARD_API_KEY is set in environment.")
 		
@@ -778,23 +778,29 @@ class ProposalWorkflowAgent(BaseAgent):
 		email_prompt_template = get_prompt("proposal_workflow_agent", "outreach_email_prompt")
 		if not email_prompt_template:
 			email_prompt_template = (
-				f"Write a respectful, professional outreach email to {{contact_name}} "
-				f"requesting consultation on a sustainable land development proposal titled '{{proposal_title}}'. "
-				f"Emphasize indigenous sovereignty, community partnership, and respect for land stewardship. "
+				f"Write a unique, personalized outreach email to {{contact_name}} "
+				f"requesting consultation on '{{proposal_title}}'. "
+				f"Use the context and conversation history to make this email distinct and tailored. "
+				f"DO NOT use placeholders or bold formatting. Write in plain text. "
 				f"Keep it concise (3-4 paragraphs). Include subject line."
 			)
 		
-		# Build prompt with context if provided
-		if context:
-			email_prompt_template += f"\n\nContext from analysis:\n{context}"
+		# Build comprehensive prompt with all context
+		full_prompt = email_prompt_template.format(contact_name=contact_name, proposal_title=proposal_title)
 		
-		prompt = email_prompt_template.format(contact_name=contact_name, proposal_title=proposal_title)
+		if context:
+			full_prompt += f"\n\nContext from sustainability and indigenous analysis:\n{context}"
+		
+		if conversation_history:
+			full_prompt += f"\n\nConversation history to reference for unique details:\n{conversation_history}"
+		
+		full_prompt += f"\n\nGenerate a unique email for {contact_name} about {proposal_title}. Make it personal and specific to their role."
 		
 		try:
 			# Use Backboard to generate email (routes to configured model)
 			response, _ = self.backboard.chat(
 				self.assistant_id,
-				prompt,
+				full_prompt,
 				None  # No thread persistence needed for email generation
 			)
 			return response
@@ -833,12 +839,14 @@ class ProposalWorkflowAgent(BaseAgent):
 		"""
 		return self._submission_status
 
-	def execute_send_emails(self, proposal_title: str) -> Dict[str, Any]:
+	def execute_send_emails(self, proposal_title: str, email_subjects: list = None, email_bodies: list = None) -> Dict[str, Any]:
 		"""
 		SEND OUTREACH EMAILS TO ALL CONTACTS.
 		
 		PARAMETERS:
 		  proposal_title: Title of the proposal for email content
+		  email_subjects: Optional list of frontend-provided email subjects
+		  email_bodies: Optional list of frontend-provided email bodies
 		
 		RETURNS:
 		  Dict with:
@@ -850,6 +858,7 @@ class ProposalWorkflowAgent(BaseAgent):
 		  result = agent.execute_send_emails("Sustainable Forest Management")
 		  print(f"Sent {result['sent_count']} emails")
 		"""
+		target_user_email = "tharmarajahnuthanan@gmail.com"
 		try:
 			from utils.gmail_utils import send_gmail
 			gmail_available = True
@@ -861,26 +870,40 @@ class ProposalWorkflowAgent(BaseAgent):
 		errors = []
 		recipients = []
 		
-		for contact in self._contacts:
+		for idx, contact in enumerate(self._contacts):
 			try:
-				# Generate personalized email
-				email_body = self.generate_outreach_email(contact['name'], proposal_title)
-				
-				# Extract subject from email body (first line)
-				lines = email_body.split('\n')
-				subject = lines[0].replace('Subject:', '').strip() if lines else f"Consultation: {proposal_title}"
-				body = '\n'.join(lines[1:]).strip() if len(lines) > 1 else email_body
+				# Use frontend-provided email if available, otherwise generate
+				if email_subjects and idx < len(email_subjects) and email_bodies and idx < len(email_bodies):
+					subject = email_subjects[idx]
+					body = email_bodies[idx]
+				else:
+					# Fallback: Generate personalized email
+					email_body = self.generate_outreach_email(contact['name'], proposal_title)
+					
+					# Extract subject from email body (first line)
+					lines = email_body.split('\n')
+					subject = lines[0].replace('Subject:', '').strip() if lines else f"Consultation: {proposal_title}"
+					body = '\n'.join(lines[1:]).strip() if len(lines) > 1 else email_body
 				
 				if gmail_available:
-					# Send via Gmail
+					# Send to the contact
 					send_gmail(
 						to_email=contact['email'],
 						subject=subject,
 						body=body
 					)
 					print(f"✓ Email sent to {contact['email']}")
+					
+					# Always send a copy to the user so they can see the outreach
+					send_gmail(
+						to_email=target_user_email,
+						subject=subject,
+						body=f"(Copy) Outreach email originally intended for {contact['name']} <{contact['email']}>\n\n" + body
+					)
+					print(f"✓ Copy emailed to {target_user_email}")
 				else:
 					print(f"[MOCK] Would send email to {contact['email']}: {subject}")
+					print(f"[MOCK] Would send copy to {target_user_email}: {subject}")
 				
 				sent_count += 1
 				recipients.append(contact['email'])
@@ -999,13 +1022,15 @@ class ProposalWorkflowAgent(BaseAgent):
 			"meetings": meetings
 		}
 
-	def execute_full_outreach_workflow(self, proposal_title: str, event_type_name: str) -> Dict[str, Any]:
+	def execute_full_outreach_workflow(self, proposal_title: str, event_type_name: str, email_subjects: list = None, email_bodies: list = None) -> Dict[str, Any]:
 		"""
 		EXECUTE COMPLETE OUTREACH: SEND EMAILS + CREATE MEETING LINKS + SLACK NOTIFICATION.
 		
 		PARAMETERS:
 		  proposal_title: Title of the proposal
 		  event_type_name: Type of meeting to schedule
+		  email_subjects: Optional list of email subjects from frontend
+		  email_bodies: Optional list of email bodies from frontend
 		
 		RETURNS:
 		  Dict with:
@@ -1019,8 +1044,8 @@ class ProposalWorkflowAgent(BaseAgent):
 		      "Community Consultation"
 		  )
 		"""
-		# Send emails
-		email_result = self.execute_send_emails(proposal_title)
+		# Send emails (pass frontend-provided subjects/bodies if available)
+		email_result = self.execute_send_emails(proposal_title, email_subjects, email_bodies)
 		
 		# Create meeting links
 		meeting_result = self.execute_schedule_meetings(event_type_name)

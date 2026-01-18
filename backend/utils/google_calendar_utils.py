@@ -114,8 +114,7 @@ def create_calendar_meeting(
                 'timeZone': 'UTC',
             },
             'attendees': [
-                {'email': 'nuthanan06@gmail.com', 'displayName': 'Event Organizer'},
-                {'email': contact_email, 'displayName': contact_name}
+                {'email': 'tharmarajahnuthanan@gmail.com', 'displayName': 'Nuthanan Tharmarajah'}
             ],
             'reminders': {
                 'useDefault': False,
@@ -145,7 +144,8 @@ def create_calendar_meeting(
         
         print(f"✓ Google Calendar meeting created:")
         print(f"  Title: {event_title}")
-        print(f"  Invitee: {contact_name} ({contact_email})")
+        print(f"  Invited: tharmarajahnuthanan@gmail.com")
+        print(f"  Contact Reference: {contact_name} ({contact_email})")
         print(f"  Time: {start_time.strftime('%Y-%m-%d %H:%M UTC')}")
         print(f"  Link: {meeting_link}")
         print(f"  Meet: {hangout_link}")

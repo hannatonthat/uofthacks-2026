@@ -1197,21 +1197,25 @@ def generate_workflow_action_plan(request: ProposalGenerationRequest):
 		# Combine contexts for email enhancement
 		combined_context = f"Sustainability insights: {sustainability_context}\nIndigenous perspectives: {indigenous_context}"
 		
+		# Build conversation history from agent responses (full context for unique emails)
+		conversation_history = f"Sustainability Agent Discussion:\n{sust_response if 'sust_response' in locals() else 'Not available'}\n\nIndigenous Context Agent Discussion:\n{indg_response if 'indg_response' in locals() else 'Not available'}"
+		
 		for contact in suggested_contacts[:3]:  # Limit to 3 for demo
 			try:
 				email_content = workflow_agent.generate_outreach_email(
 					contact_name=contact['role'],
 					proposal_title=proposal_title,
-					context=combined_context
+					context=combined_context,
+					conversation_history=conversation_history
 				)
 				email_drafts.append({
-					"to": "nuthanan06@gmail.com",  # Demo: Send to your email only
+					"to": "tharmarajahnuthanan@gmail.com",  # Demo: Send to your email only
 					"subject": f"Consultation Request: {proposal_title} - {contact['role']}",
 					"body": email_content,
 					"reason": contact['reason'],
 					"stakeholder_role": contact['role'],
 					"stakeholder_email": contact['email'],  # Show what it would be
-					"note": "DEMO: Sending to nuthanan06@gmail.com to avoid emailing random addresses"
+					"note": "DEMO: Sending to tharmarajahnuthanan@gmail.com to avoid emailing random addresses"
 				})
 			except Exception as e:
 				print(f"Email generation skipped: {e}")
@@ -1328,6 +1332,8 @@ class WorkflowRequest(BaseModel):
     """Request body for workflow actions."""
     proposal_title: str
     event_type_name: Optional[str] = None  # For scheduling meetings
+    email_subjects: Optional[list[str]] = None  # Email subjects from frontend
+    email_bodies: Optional[list[str]] = None  # Email bodies from frontend
 
 
 class ConfirmationRequest(BaseModel):
@@ -1510,7 +1516,9 @@ def workflow_full_outreach(
             "proposal_title": request.proposal_title,
             "event_type_name": request.event_type_name,
             "contact_count": len(contacts),
-            "contacts": contacts
+            "contacts": contacts,
+            "email_subjects": request.email_subjects or [],
+            "email_bodies": request.email_bodies or []
         }
     )
     action_id = confirmation_req.action_id
@@ -1524,6 +1532,8 @@ def workflow_full_outreach(
             "event_type_name": request.event_type_name,
             "contact_count": len(contacts),
             "contacts": contacts,
+            "email_subjects": request.email_subjects or [],
+            "email_bodies": request.email_bodies or [],
             "actions": ["Send emails", "Create scheduling links", "Send Slack notification"]
         }
     }
@@ -1587,7 +1597,9 @@ def confirm_workflow_action(confirmation: ConfirmationRequest = Body(...)):
         elif action_type == ActionType.FULL_OUTREACH:
             result = agent.execute_full_outreach_workflow(
                 context["proposal_title"],
-                context["event_type_name"]
+                context["event_type_name"],
+                email_subjects=context.get("email_subjects", []),
+                email_bodies=context.get("email_bodies", [])
             )
             return {
                 "status": "success",
