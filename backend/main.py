@@ -18,6 +18,7 @@ from io import BytesIO
 from concurrent.futures import ThreadPoolExecutor
 
 from agents.specialized_agents import SustainabilityAgent, IndigenousContextAgent, ProposalWorkflowAgent
+from agents.confirmation_service import ConfirmationService, ActionType
 
 from database import get_database, close_database, get_collection
 from utils.geo_queries import (
@@ -450,6 +451,9 @@ async def get_user_preferences(user_id: str):
 
 
 # Agent chat endpoints (merged from api.py)
+# In-memory storage for agents and confirmations
+workflow_agents = {}  # {thread_id: ProposalWorkflowAgent}
+confirmation_service = ConfirmationService()  # Global confirmation service
 
 @app.post("/create-chat")
 def create_chat(request: ChatRequest) -> ChatResponse:
@@ -968,6 +972,519 @@ def add_sustainability_chat(threadid: str = Query(...), request: ChatRequest = B
         vision_url=vision_path_return,
         original_image_url=original_path_return,
     )
+
+
+# ============================================================================
+# WORKFLOW ENDPOINTS WITH CONFIRMATION SYSTEM
+# ============================================================================
+
+class ProposalGenerationRequest(BaseModel):
+	"""Request body for generating a proposal from indigenous context."""
+	location: str  # e.g., "Traditional Haudenosaunee Territory, Southern Ontario"
+	land_use: str  # e.g., "Forest Management", "Water Conservation"
+	objectives: Optional[str] = None  # e.g., "Sustainable harvesting practices"
+	timeframe: Optional[str] = None  # e.g., "5-year plan"
+
+
+@app.post("/workflow/generate-proposal")
+def generate_indigenous_proposal(request: ProposalGenerationRequest):
+	"""
+	Generate a proposal from indigenous perspectives and land context.
+	
+	Uses IndigenousContextAgent to create a culturally-informed proposal
+	that respects indigenous sovereignty and land stewardship principles.
+	
+	PARAMETERS:
+	  location: Geographic location/territory
+	  land_use: Type of land use or initiative
+	  objectives: Specific goals for the proposal
+	  timeframe: Duration or timeline for implementation
+	
+	RETURNS:
+	  {
+	    "status": "success",
+	    "proposal_title": "Generated title respecting indigenous context",
+	    "proposal_content": "Full proposal text",
+	    "recommendations": ["List of", "indigenous-informed", "recommendations"]
+	  }
+	"""
+	try:
+		# Create indigenous context agent
+		indigenous_agent = IndigenousContextAgent(
+			base_prompt="Generate respectful, indigenous-informed proposals that prioritize tribal sovereignty and land stewardship."
+		)
+		
+		# Build context-aware prompt
+		context_prompt = (
+			f"Generate a comprehensive proposal for {request.land_use} "
+			f"in/at {request.location}. "
+		)
+		
+		if request.objectives:
+			context_prompt += f"Objectives: {request.objectives}. "
+		
+		if request.timeframe:
+			context_prompt += f"Timeframe: {request.timeframe}. "
+		
+		context_prompt += (
+			"The proposal should: "
+			"1. Center indigenous sovereignty and traditional land management practices "
+			"2. Include consultation with local indigenous communities "
+			"3. Respect ecological systems and sacred sites "
+			"4. Align with long-term stewardship principles "
+			"5. Include measurable outcomes that benefit both land and community. "
+			"Format as: TITLE, OVERVIEW, KEY OBJECTIVES, IMPLEMENTATION PLAN, COMMUNITY BENEFITS, MEASUREMENT & ACCOUNTABILITY"
+		)
+		
+		# Generate proposal via indigenous agent
+		proposal_content = indigenous_agent.chat_with_context(context_prompt)
+		
+		# Extract title from proposal (first line usually)
+		lines = proposal_content.split('\n')
+		proposal_title = lines[0] if lines else f"{request.land_use} Initiative - {request.location}"
+		
+		# Extract key recommendations
+		recommendations = []
+		if "COMMUNITY BENEFITS" in proposal_content:
+			benefits_section = proposal_content.split("COMMUNITY BENEFITS")[1]
+			benefit_lines = [line.strip() for line in benefits_section.split('\n') if line.strip() and line.strip().startswith('-')]
+			recommendations = [line[1:].strip() for line in benefit_lines[:5]]
+		
+		return {
+			"status": "success",
+			"proposal_title": proposal_title,
+			"proposal_content": proposal_content,
+			"recommendations": recommendations if recommendations else [
+				"Centered indigenous sovereignty",
+				"Community-led decision making",
+				"Ecological stewardship",
+				"Long-term sustainability",
+				"Cultural respect and protocols"
+			],
+			"metadata": {
+				"location": request.location,
+				"land_use": request.land_use,
+				"objectives": request.objectives,
+				"timeframe": request.timeframe
+			}
+		}
+	
+	except Exception as e:
+		return {
+			"status": "error",
+			"message": f"Failed to generate proposal: {str(e)}",
+			"error": str(e)
+		}
+
+
+class ContactRequest(BaseModel):
+    """Request body for adding a contact."""
+    name: str
+    role: str
+    email: str
+    phone: Optional[str] = None
+
+
+class WorkflowRequest(BaseModel):
+    """Request body for workflow actions."""
+    proposal_title: str
+    event_type_name: Optional[str] = None  # For scheduling meetings
+
+
+class ConfirmationRequest(BaseModel):
+    """Request body for confirming/rejecting actions."""
+    action_id: str
+    approved: bool
+
+
+@app.post("/workflow/add-contact")
+def add_workflow_contact(
+    threadid: str = Query(..., description="Thread ID for the workflow agent"),
+    contact: ContactRequest = Body(...)
+):
+    """Add a contact to the workflow agent's contact list."""
+    # Get or create workflow agent for this thread
+    if threadid not in workflow_agents:
+        workflow_agents[threadid] = ProposalWorkflowAgent()
+    
+    agent = workflow_agents[threadid]
+    
+    # Add contact
+    result = agent.add_contact(
+        name=contact.name,
+        role=contact.role,
+        email=contact.email,
+        phone=contact.phone
+    )
+    
+    return {
+        "status": "success",
+        "message": result,
+        "thread_id": threadid,
+        "contact": {
+            "name": contact.name,
+            "role": contact.role,
+            "email": contact.email,
+            "phone": contact.phone
+        }
+    }
+
+
+@app.get("/workflow/contacts")
+def get_workflow_contacts(threadid: str = Query(..., description="Thread ID for the workflow agent")):
+    """Get all contacts for the specified workflow thread."""
+    if threadid not in workflow_agents:
+        return {
+            "status": "success",
+            "thread_id": threadid,
+            "contacts": [],
+            "count": 0
+        }
+    
+    agent = workflow_agents[threadid]
+    contacts = agent.get_contacts()
+    
+    return {
+        "status": "success",
+        "thread_id": threadid,
+        "contacts": contacts,
+        "count": len(contacts)
+    }
+
+
+@app.post("/workflow/send-emails")
+def workflow_send_emails(
+    threadid: str = Query(..., description="Thread ID for the workflow agent"),
+    request: WorkflowRequest = Body(...)
+):
+    """
+    Send outreach emails to all contacts.
+    Requires confirmation before actual execution.
+    """
+    if threadid not in workflow_agents:
+        raise HTTPException(status_code=404, detail="Workflow thread not found. Add contacts first.")
+    
+    agent = workflow_agents[threadid]
+    contacts = agent.get_contacts()
+    
+    if not contacts:
+        raise HTTPException(status_code=400, detail="No contacts found. Add contacts before sending emails.")
+    
+    # Request confirmation
+    confirmation_req = confirmation_service.create_confirmation(
+        action_type=ActionType.SEND_EMAILS,
+        description=f"Send emails to {len(contacts)} contacts",
+        details={
+            "thread_id": threadid,
+            "proposal_title": request.proposal_title,
+            "contact_count": len(contacts),
+            "contacts": contacts
+        }
+    )
+    action_id = confirmation_req.action_id
+    
+    return {
+        "status": "pending_confirmation",
+        "action_id": action_id,
+        "message": f"Confirmation required to send emails to {len(contacts)} contacts",
+        "context": {
+            "proposal_title": request.proposal_title,
+            "contact_count": len(contacts),
+            "contacts": contacts
+        }
+    }
+
+
+@app.post("/workflow/schedule-meetings")
+def workflow_schedule_meetings(
+    threadid: str = Query(..., description="Thread ID for the workflow agent"),
+    request: WorkflowRequest = Body(...)
+):
+    """
+    Create Calendly scheduling links for all contacts.
+    Requires confirmation before actual execution.
+    """
+    if threadid not in workflow_agents:
+        raise HTTPException(status_code=404, detail="Workflow thread not found. Add contacts first.")
+    
+    agent = workflow_agents[threadid]
+    contacts = agent.get_contacts()
+    
+    if not contacts:
+        raise HTTPException(status_code=400, detail="No contacts found. Add contacts before scheduling meetings.")
+    
+    if not request.event_type_name:
+        raise HTTPException(status_code=400, detail="event_type_name is required for scheduling meetings")
+    
+    # Request confirmation
+    confirmation_req = confirmation_service.create_confirmation(
+        action_type=ActionType.SCHEDULE_MEETINGS,
+        description=f"Create scheduling links for {len(contacts)} contacts",
+        details={
+            "thread_id": threadid,
+            "event_type_name": request.event_type_name,
+            "contact_count": len(contacts),
+            "contacts": contacts
+        }
+    )
+    action_id = confirmation_req.action_id
+    
+    return {
+        "status": "pending_confirmation",
+        "action_id": action_id,
+        "message": f"Confirmation required to create scheduling links for {len(contacts)} contacts",
+        "context": {
+            "event_type_name": request.event_type_name,
+            "contact_count": len(contacts),
+            "contacts": contacts
+        }
+    }
+
+
+@app.post("/workflow/full-outreach")
+def workflow_full_outreach(
+    threadid: str = Query(..., description="Thread ID for the workflow agent"),
+    request: WorkflowRequest = Body(...)
+):
+    """
+    Execute full outreach workflow: send emails + create scheduling links + Slack notification.
+    Requires confirmation before actual execution.
+    """
+    if threadid not in workflow_agents:
+        raise HTTPException(status_code=404, detail="Workflow thread not found. Add contacts first.")
+    
+    agent = workflow_agents[threadid]
+    contacts = agent.get_contacts()
+    
+    if not contacts:
+        raise HTTPException(status_code=400, detail="No contacts found. Add contacts before executing outreach.")
+    
+    if not request.event_type_name:
+        raise HTTPException(status_code=400, detail="event_type_name is required for full outreach")
+    
+    # Request confirmation
+    confirmation_req = confirmation_service.create_confirmation(
+        action_type=ActionType.FULL_OUTREACH,
+        description=f"Execute full outreach to {len(contacts)} contacts",
+        details={
+            "thread_id": threadid,
+            "proposal_title": request.proposal_title,
+            "event_type_name": request.event_type_name,
+            "contact_count": len(contacts),
+            "contacts": contacts
+        }
+    )
+    action_id = confirmation_req.action_id
+    
+    return {
+        "status": "pending_confirmation",
+        "action_id": action_id,
+        "message": f"Confirmation required to execute full outreach to {len(contacts)} contacts",
+        "context": {
+            "proposal_title": request.proposal_title,
+            "event_type_name": request.event_type_name,
+            "contact_count": len(contacts),
+            "contacts": contacts,
+            "actions": ["Send emails", "Create scheduling links", "Send Slack notification"]
+        }
+    }
+
+
+@app.post("/workflow/confirm")
+def confirm_workflow_action(confirmation: ConfirmationRequest = Body(...)):
+    """
+    Confirm or reject a pending workflow action.
+    If approved, executes the action. If rejected, cancels it.
+    """
+    action_id = confirmation.action_id
+    approved = confirmation.approved
+    
+    # Get pending action
+    confirmation_req = confirmation_service.get_confirmation(action_id)
+    if not confirmation_req or confirmation_req.confirmed or confirmation_req.rejected:
+        raise HTTPException(status_code=404, detail="Action not found or already processed")
+    
+    # Save context before approving/rejecting (approval/rejection removes from pending)
+    action_type = confirmation_req.action_type
+    context = confirmation_req.details
+    thread_id = context["thread_id"]
+    
+    # Process confirmation
+    if not approved:
+        confirmation_service.reject_action(action_id)
+        return {
+            "status": "rejected",
+            "action_id": action_id,
+            "message": "Action cancelled by user"
+        }
+    
+    # Approve and execute
+    confirmation_service.approve_action(action_id)
+    
+    if thread_id not in workflow_agents:
+        raise HTTPException(status_code=404, detail="Workflow thread not found")
+    
+    agent = workflow_agents[thread_id]
+    
+    try:
+        if action_type == ActionType.SEND_EMAILS:
+            result = agent.execute_send_emails(context["proposal_title"])
+            return {
+                "status": "success",
+                "action_id": action_id,
+                "action_type": "send_emails",
+                "result": result
+            }
+        
+        elif action_type == ActionType.SCHEDULE_MEETINGS:
+            result = agent.execute_schedule_meetings(context["event_type_name"])
+            return {
+                "status": "success",
+                "action_id": action_id,
+                "action_type": "schedule_meetings",
+                "result": result
+            }
+        
+        elif action_type == ActionType.FULL_OUTREACH:
+            result = agent.execute_full_outreach_workflow(
+                context["proposal_title"],
+                context["event_type_name"]
+            )
+            return {
+                "status": "success",
+                "action_id": action_id,
+                "action_type": "full_outreach",
+                "result": result
+            }
+        
+        else:
+            raise HTTPException(status_code=400, detail=f"Unknown action type: {action_type}")
+    
+    except Exception as e:
+        return {
+            "status": "error",
+            "action_id": action_id,
+            "message": f"Error executing action: {str(e)}"
+        }
+
+
+@app.get("/workflow/pending-actions")
+def get_pending_actions():
+    """Get all pending actions awaiting confirmation."""
+    pending = confirmation_service.get_pending()
+    return {
+        "status": "success",
+        "pending_count": len(pending),
+        "actions": pending
+    }
+
+
+@app.get("/workflow/history")
+def get_workflow_history(threadid: str = Query(..., description="Thread ID for the workflow agent")):
+    """Get the workflow execution history for a specific thread."""
+    if threadid not in workflow_agents:
+        return {
+            "status": "success",
+            "thread_id": threadid,
+            "history": [],
+            "message": "No workflow history found for this thread"
+        }
+    
+    agent = workflow_agents[threadid]
+    history = agent.get_workflow_history()
+    
+    return {
+        "status": "success",
+        "thread_id": threadid,
+        "history": history,
+        "count": len(history)
+    }
+
+
+@app.get("/workflow/verification")
+async def verify_integrations():
+	"""
+	CHECK THE STATUS OF ALL INTEGRATIONS.
+	
+	Returns configuration status for:
+	- Calendly (API key configured, sample link creation)
+	- Slack (webhook configured)
+	- Gmail (credentials type check)
+	
+	Use this endpoint to verify that all integrations are properly configured.
+	"""
+	import os
+	from pathlib import Path
+	
+	verification_status = {
+		"timestamp": datetime.now().isoformat(),
+		"integrations": {}
+	}
+	
+	# Check Calendly
+	try:
+		from utils.calendly_utils import verify_calendly_setup
+		calendly_setup = verify_calendly_setup()
+		verification_status["integrations"]["calendly"] = {
+			"configured": "CALENDLY_API_KEY" in os.environ,
+			"api_key_set": bool(os.getenv("CALENDLY_API_KEY")),
+			"status": "✓ Ready to use real API" if os.getenv("CALENDLY_API_KEY") else "Using mock links",
+			"details": calendly_setup
+		}
+	except Exception as e:
+		verification_status["integrations"]["calendly"] = {
+			"configured": False,
+			"error": str(e),
+			"status": "⚠ Error checking Calendly"
+		}
+	
+	# Check Slack
+	slack_webhook = os.getenv("SLACK_WEBHOOK_URL")
+	verification_status["integrations"]["slack"] = {
+		"configured": bool(slack_webhook),
+		"webhook_set": bool(slack_webhook),
+		"status": "✓ Ready to send notifications" if slack_webhook else "[MOCK] Using mock notifications",
+		"webhook_preview": slack_webhook[:50] + "..." if slack_webhook else None
+	}
+	
+	# Check Gmail
+	credentials_path = Path(__file__).parent / "credentials.json"
+	gmail_configured = credentials_path.exists()
+	gmail_credentials_type = None
+	gmail_error = None
+	
+	if gmail_configured:
+		try:
+			import json
+			with open(credentials_path, 'r') as f:
+				creds = json.load(f)
+				if 'web' in creds:
+					gmail_credentials_type = "Web (⚠ NOT SUPPORTED - Need Desktop app type)"
+					gmail_error = "You're using web credentials. Download Desktop app credentials from Google Console."
+				elif 'installed' in creds:
+					gmail_credentials_type = "Desktop (✓ CORRECT)"
+				else:
+					gmail_credentials_type = "Unknown format"
+		except Exception as e:
+			gmail_error = str(e)
+	
+	verification_status["integrations"]["gmail"] = {
+		"configured": gmail_configured,
+		"credentials_exist": gmail_configured,
+		"credentials_path": str(credentials_path),
+		"credentials_type": gmail_credentials_type,
+		"status": "✓ Ready to send emails" if gmail_credentials_type == "Desktop (✓ CORRECT)" else "⚠ Configuration issue",
+		"error": gmail_error
+	}
+	
+	# Summary
+	verification_status["summary"] = {
+		"total_integrations": 3,
+		"configured": sum(1 for i in verification_status["integrations"].values() if i.get("configured")),
+		"ready": sum(1 for i in verification_status["integrations"].values() if "✓" in i.get("status", ""))
+	}
+	
+	return verification_status
 
 
 # Helper functions removed - no AI recommendations yet

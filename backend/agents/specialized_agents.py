@@ -675,6 +675,9 @@ class ProposalWorkflowAgent(BaseAgent):
 		
 		# Contact list for outreach
 		self._contacts: List[Dict[str, str]] = []
+		
+		# Workflow history tracking
+		self._workflow_history: List[Dict[str, Any]] = []
 
 	def get_submission_workflow(self, region: str) -> List[str]:
 		"""
@@ -825,6 +828,250 @@ class ProposalWorkflowAgent(BaseAgent):
 		  print(f"Progress: {status['step']}/{status['total_steps']}")
 		"""
 		return self._submission_status
+
+	def execute_send_emails(self, proposal_title: str) -> Dict[str, Any]:
+		"""
+		SEND OUTREACH EMAILS TO ALL CONTACTS.
+		
+		PARAMETERS:
+		  proposal_title: Title of the proposal for email content
+		
+		RETURNS:
+		  Dict with:
+		    - sent_count: Number of emails sent successfully
+		    - errors: List of error messages
+		    - recipients: List of recipient emails
+		
+		EXAMPLE:
+		  result = agent.execute_send_emails("Sustainable Forest Management")
+		  print(f"Sent {result['sent_count']} emails")
+		"""
+		try:
+			from utils.gmail_utils import send_gmail
+			gmail_available = True
+		except (ImportError, ValueError) as e:
+			print(f"Warning: Gmail not available - {str(e)}")
+			gmail_available = False
+		
+		sent_count = 0
+		errors = []
+		recipients = []
+		
+		for contact in self._contacts:
+			try:
+				# Generate personalized email
+				email_body = self.generate_outreach_email(contact['name'], proposal_title)
+				
+				# Extract subject from email body (first line)
+				lines = email_body.split('\n')
+				subject = lines[0].replace('Subject:', '').strip() if lines else f"Consultation: {proposal_title}"
+				body = '\n'.join(lines[1:]).strip() if len(lines) > 1 else email_body
+				
+				if gmail_available:
+					# Send via Gmail
+					send_gmail(
+						to_email=contact['email'],
+						subject=subject,
+						body=body
+					)
+					print(f"✓ Email sent to {contact['email']}")
+				else:
+					print(f"[MOCK] Would send email to {contact['email']}: {subject}")
+				
+				sent_count += 1
+				recipients.append(contact['email'])
+				
+				# Log to history
+				self._workflow_history.append({
+					"timestamp": self._get_timestamp(),
+					"action": "send_email",
+					"status": "success" if gmail_available else "mock",
+					"recipient": contact['email'],
+					"details": f"Sent to {contact['name']}" if gmail_available else f"Mock sent to {contact['name']}"
+				})
+				
+			except Exception as e:
+				error_msg = str(e)
+				errors.append(f"{contact['name']} ({contact['email']}): {error_msg}")
+				self._workflow_history.append({
+					"timestamp": self._get_timestamp(),
+					"action": "send_email",
+					"status": "error",
+					"recipient": contact['email'],
+					"details": error_msg
+				})
+		
+		return {
+			"sent_count": sent_count,
+			"errors": errors,
+			"recipients": recipients
+		}
+
+	def execute_schedule_meetings(self, event_type_name: str) -> Dict[str, Any]:
+		"""
+		CREATE GOOGLE CALENDAR MEETINGS FOR ALL CONTACTS.
+		
+		PARAMETERS:
+		  event_type_name: Name of the event type (e.g., "Consultation Meeting")
+		
+		RETURNS:
+		  Dict with:
+		    - meetings_count: Number of meetings created
+		    - meetings: List of {contact_name, link, meet_link} dicts
+		
+		EXAMPLE:
+		  result = agent.execute_schedule_meetings("Indigenous Consultation")
+		  print(f"Created {result['meetings_count']} calendar meetings")
+		"""
+		try:
+			from utils.google_calendar_utils import create_calendar_meeting
+			calendar_available = True
+		except ImportError:
+			print("Warning: google_calendar_utils not available, meetings will not be created")
+			calendar_available = False
+		
+		meetings = []
+		
+		for contact in self._contacts:
+			try:
+				if calendar_available:
+					# Create Google Calendar meeting
+					meeting_result = create_calendar_meeting(
+						contact_name=contact['name'],
+						contact_email=contact['email'],
+						event_title=f"{event_type_name} - {contact['name']}",
+						description=f"Consultation meeting with {contact['name']} ({contact['role']})",
+						duration_minutes=60
+					)
+					
+					if meeting_result:
+						meetings.append({
+							"contact_name": contact['name'],
+							"link": meeting_result['link'],
+							"meet_link": meeting_result.get('meet_link', 'N/A'),
+							"start_time": meeting_result['start_time']
+						})
+						
+						# Log to history
+						self._workflow_history.append({
+							"timestamp": self._get_timestamp(),
+							"action": "schedule_meeting",
+							"status": "success",
+							"recipient": contact['email'],
+							"details": f"Created meeting for {contact['name']}: {meeting_result['link']} (Meet: {meeting_result.get('meet_link', 'N/A')})"
+						})
+					else:
+						raise Exception("Meeting creation returned None")
+				else:
+					# Fallback
+					mock_link = f"https://calendar.google.com/mock/{contact['email']}"
+					meetings.append({
+						"contact_name": contact['name'],
+						"link": mock_link,
+						"meet_link": "N/A"
+					})
+					
+					self._workflow_history.append({
+						"timestamp": self._get_timestamp(),
+						"action": "schedule_meeting",
+						"status": "success",
+						"recipient": contact['email'],
+						"details": f"Created mock meeting for {contact['name']}: {mock_link}"
+					})
+				
+			except Exception as e:
+				error_msg = f"Failed to create calendar meeting: {str(e)}"
+				print(f"[ERROR] {contact['name']}: {error_msg}")
+				self._workflow_history.append({
+					"timestamp": self._get_timestamp(),
+					"action": "schedule_meeting",
+					"status": "error",
+					"recipient": contact['email'],
+					"details": error_msg
+				})
+		
+		return {
+			"meetings_count": len(meetings),
+			"meetings": meetings
+		}
+
+	def execute_full_outreach_workflow(self, proposal_title: str, event_type_name: str) -> Dict[str, Any]:
+		"""
+		EXECUTE COMPLETE OUTREACH: SEND EMAILS + CREATE MEETING LINKS + SLACK NOTIFICATION.
+		
+		PARAMETERS:
+		  proposal_title: Title of the proposal
+		  event_type_name: Type of meeting to schedule
+		
+		RETURNS:
+		  Dict with:
+		    - emails_sent: Number of emails sent
+		    - meetings_scheduled: Number of meeting links created
+		    - slack_notified: Whether Slack notification sent
+		
+		EXAMPLE:
+		  result = agent.execute_full_outreach_workflow(
+		      "Forest Management Plan",
+		      "Community Consultation"
+		  )
+		"""
+		# Send emails
+		email_result = self.execute_send_emails(proposal_title)
+		
+		# Create meeting links
+		meeting_result = self.execute_schedule_meetings(event_type_name)
+		
+		# Send Slack notification (optional, won't fail if not configured)
+		slack_notified = False
+		try:
+			from utils.slack_utils import send_slack_notification
+			slack_message = (
+				f"📢 *Full Outreach Executed*\n"
+				f"• {email_result['sent_count']} emails sent\n"
+				f"• {meeting_result['meetings_count']} meetings scheduled\n"
+				f"• Proposal: {proposal_title}\n\n"
+				f"🤝 *Suggested Team Meeting*\n"
+				f"Would you like to schedule a meeting to discuss your team's involvement at this location?\n"
+				f"This would be a great opportunity to align on the initiative and gather feedback."
+			)
+			send_slack_notification(slack_message)
+			slack_notified = True
+		except Exception as e:
+			print(f"Slack notification skipped (non-critical): {e}")
+		
+		# Update submission status
+		self.update_submission_status(3, 10)  # On step 3 of 10-step workflow
+		
+		return {
+			"emails_sent": email_result['sent_count'],
+			"meetings_scheduled": meeting_result['meetings_count'],
+			"slack_notified": slack_notified,
+			"email_errors": email_result['errors']
+		}
+
+	def _get_timestamp(self) -> str:
+		"""Get current timestamp for history logging."""
+		from datetime import datetime
+		return datetime.utcnow().isoformat()
+
+	def get_workflow_history(self) -> List[Dict[str, Any]]:
+		"""
+		GET WORKFLOW EXECUTION HISTORY.
+		
+		RETURNS:
+		  List of workflow action dicts with:
+		    - timestamp: When action occurred
+		    - action: Type of action (send_email, schedule_meeting, etc)
+		    - status: success or error
+		    - recipient: Email of recipient
+		    - details: Additional information
+		
+		EXAMPLE:
+		  history = agent.get_workflow_history()
+		  for entry in history:
+		      print(f"{entry['timestamp']}: {entry['action']} - {entry['status']}")
+		"""
+		return self._workflow_history
 
 	def chat_with_context(self, user_query: str) -> str:
 		"""
