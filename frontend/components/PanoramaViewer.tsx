@@ -509,6 +509,7 @@ export default function PanoramaViewer({ isOpen, onClose, panoramaPath, location
     }
   };
 
+
   if (!isOpen || !panoramaPath) return null;
 
   return (

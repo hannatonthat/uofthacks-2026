@@ -2,12 +2,13 @@
 
 from typing import Dict, List, Any
 from enum import Enum
+from datetime import datetime
 
 
 class ActionType(Enum):
     """Types of actions requiring confirmation."""
-    SEND_EMAIL = "send_email"
-    SCHEDULE_MEETING = "schedule_meeting"
+    SEND_EMAILS = "send_emails"
+    SCHEDULE_MEETINGS = "schedule_meetings"
     FULL_OUTREACH = "full_outreach"
     DELETE_CONTACT = "delete_contact"
 
@@ -23,6 +24,7 @@ class ConfirmationRequest:
         details: Dict[str, Any],
         requires_confirmation: bool = True
     ):
+        from datetime import datetime
         self.action_type = action_type
         self.action_id = action_id
         self.description = description
@@ -30,17 +32,26 @@ class ConfirmationRequest:
         self.requires_confirmation = requires_confirmation
         self.confirmed = False
         self.rejected = False
+        self.timestamp = datetime.utcnow().isoformat()
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for API responses."""
+        status = "pending"
+        if self.confirmed:
+            status = "confirmed"
+        elif self.rejected:
+            status = "rejected"
+        
         return {
             "action_id": self.action_id,
             "action_type": self.action_type.value,
             "description": self.description,
             "details": self.details,
+            "status": status,
             "confirmed": self.confirmed,
             "rejected": self.rejected,
-            "requires_confirmation": self.requires_confirmation
+            "requires_confirmation": self.requires_confirmation,
+            "timestamp": self.timestamp
         }
 
 
@@ -121,6 +132,8 @@ class ConfirmationService:
         
         self.pending_confirmations[action_id].confirmed = True
         self.executed_actions.append(action_id)
+        # Remove from pending after marking as confirmed
+        del self.pending_confirmations[action_id]
         return True
     
     def reject_action(self, action_id: str) -> bool:
@@ -138,6 +151,8 @@ class ConfirmationService:
         
         self.pending_confirmations[action_id].rejected = True
         self.rejected_actions.append(action_id)
+        # Remove from pending after marking as rejected
+        del self.pending_confirmations[action_id]
         return True
     
     def get_pending(self) -> List[Dict[str, Any]]:

@@ -65,14 +65,28 @@ SCALE: 30-40% visible enhancement - clear improvements but still recognizable as
     },
     "proposal_workflow_agent": {
         "base_prompt": "Ensure all outreach emphasizes community-led decision-making and respect for indigenous sovereignty. Generate emails that are respectful and professional. All workflow steps must include indigenous consultation at every stage, not as an afterthought.",
-        "outreach_email_prompt": """Write a respectful, professional outreach email that:
-- Addresses the recipient by their proper title and role
-- Emphasizes indigenous sovereignty and community partnership
-- Highlights respect for land stewardship
-- Requests consultation on a sustainable land development proposal
-- Keeps the tone warm, professional, and culturally sensitive
-- Maintains 3-4 paragraphs with clear call-to-action
-- Includes a professional subject line""",
+        "outreach_email_prompt": """Write a unique, personalized outreach email that is tailored specifically to this recipient and proposal. Use the conversation history and context provided to make each email distinct and relevant.
+
+Requirements:
+- Address the recipient naturally by their role (e.g., "Dear Community Representative" or "Hello Elder Council Member")
+- DO NOT use placeholders like [Title], [Last Name], [Name], [Your Full Name], [Your Position], etc, just simply put Warm Regards, krispy kreme
+- DO NOT use bold formatting (**text**) or markdown - write in plain text
+- Emphasize indigenous sovereignty and community-led decision-making
+- Reference specific insights from the sustainability analysis and indigenous context
+- Clearly explain the proposal purpose, location, and land use goals
+- ALWAYS include a request to schedule an initial consultation meeting (mention that a calendar invite will be sent)
+- Make each email unique by weaving in relevant details from the conversation history
+- Keep tone warm, respectful, and culturally sensitive
+- Write 3-4 natural paragraphs with a clear call-to-action
+- Include a professional subject line
+
+Structure:
+1. Brief introduction and proposal context (what, where, why)
+2. Key insights from sustainability and indigenous analysis relevant to their role
+3. Meeting request - emphasize the importance of their input and mention that a calendar invitation will follow
+4. Warm closing expressing genuine interest in collaboration
+
+The email should feel personal and thoughtful, not templated. Each email must be different based on the recipient's role and the specific context.""",
         "email_constraints": [
             "Do not use patronizing language or tone",
             "Do not frame indigenous peoples as 'stakeholders' to be consulted; frame them as decision-makers",

@@ -32,6 +32,12 @@ env/
 .env.*.local
 *.env
 
+# OAuth Tokens (SECRETS)
+token.json
+token_calendar.json
+backend/token.json
+backend/token_calendar.json
+
 # IDEs
 .vscode/
 .idea/
