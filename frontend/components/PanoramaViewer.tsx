@@ -3,6 +3,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { createAgentChat, sendAgentMessage, ChatMessage, deleteThread } from '@/lib/api';
 import { 
+  initializeProposalWorkflow,
+  addWorkflowMessage,
+  executeWorkflow,
+  WorkflowInstruction
+} from '@/lib/proposal-workflow-api';
+import { 
   trackAgentResponseRated,
   getDeviceId,
   LocationData
@@ -37,13 +43,15 @@ interface MessageRating {
 // Declare pannellum on window for TypeScript
 declare global {
   interface Window {
-    pannellum: any;
+    pannellum: {
+      viewer: (container: HTMLDivElement, config: Record<string, unknown>) => { destroy: () => void };
+    };
   }
 }
 
 export default function PanoramaViewer({ isOpen, onClose, panoramaPath, locationData }: PanoramaViewerProps) {
   const viewerRef = useRef<HTMLDivElement>(null);
-  const pannellumViewerRef = useRef<any>(null);
+  const pannellumViewerRef = useRef<{ destroy: () => void } | null>(null);
   const scriptLoadedRef = useRef(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -68,6 +76,23 @@ export default function PanoramaViewer({ isOpen, onClose, panoramaPath, location
     indigenous: [],
     proposal: [],
   });
+
+  // Workflow state (for proposal agent)
+  const [workflowThreadId, setWorkflowThreadId] = useState<string>('');
+  const [workflowInstructions, setWorkflowInstructions] = useState<WorkflowInstruction[]>([]);
+  const [workflowInitialized, setWorkflowInitialized] = useState(false);
+  const [workflowLoading, setWorkflowLoading] = useState(false);
+  const [workflowExecuting, setWorkflowExecuting] = useState(false);
+  
+  // Track if agents have received at least one response
+  const [agentHasResponse, setAgentHasResponse] = useState<Record<AgentType, boolean>>({
+    sustainability: false,
+    indigenous: false,
+    proposal: false,
+  });
+  
+  // PDF generation state
+  const [generatingPDF, setGeneratingPDF] = useState(false);
 
   // Get current thread
   const currentThread = threads[activeAgent];
@@ -120,7 +145,60 @@ export default function PanoramaViewer({ isOpen, onClose, panoramaPath, location
 
   // Initialize Agent when switching or opening
   useEffect(() => {
-    if (isOpen && !currentThread.threadId && panoramaPath) {
+    if (isOpen && activeAgent === 'proposal' && !workflowInitialized && !workflowLoading) {
+      const initWorkflow = async () => {
+        try {
+          setWorkflowLoading(true);
+          
+          // Get context from sustainability and indigenous if available
+          const sustainabilityContext = threads.sustainability.messages.length > 1
+            ? threads.sustainability.messages[threads.sustainability.messages.length - 1].content
+            : 'Sustainable development for community';
+          
+          const indigenousContext = threads.indigenous.messages.length > 1
+            ? threads.indigenous.messages[threads.indigenous.messages.length - 1].content
+            : 'Indigenous perspectives and land stewardship';
+          
+          const locationName = locationData?.address?.split(',')[0] || 'this location';
+          const proposalTitle = `Development Proposal at ${locationName}`;
+          
+          // Initialize workflow
+          const initResponse = await initializeProposalWorkflow({
+            proposal_title: proposalTitle,
+            location: locationData?.address || 'Location',
+            sustainability_context: sustainabilityContext,
+            indigenous_context: indigenousContext,
+          });
+          
+          setWorkflowThreadId(initResponse.thread_id);
+          setWorkflowInstructions(initResponse.instructions);
+          setWorkflowInitialized(true);
+          
+          // Add initial message to proposal thread
+          setThreads(prev => ({
+            ...prev,
+            proposal: {
+              threadId: initResponse.thread_id,
+              messages: [
+                {
+                  role: 'assistant',
+                  content: 'Workflow initialized. Add stakeholders or adjust the proposal as needed.'
+                }
+              ],
+              imageHistory: [],
+              currentImageIndex: 0
+            }
+          }));
+          
+          setWorkflowLoading(false);
+        } catch (error) {
+          console.error('Error initializing workflow:', error);
+          setWorkflowLoading(false);
+        }
+      };
+      
+      initWorkflow();
+    } else if (isOpen && !currentThread.threadId && panoramaPath && activeAgent !== 'proposal') {
       const initAgent = async () => {
         try {
           setLoading(true);
@@ -131,12 +209,16 @@ export default function PanoramaViewer({ isOpen, onClose, panoramaPath, location
             initialMessage = `Analyze this street view panorama and suggest sustainable improvements. Location: ${locationData?.address || 'Unknown'}`;
           } else if (activeAgent === 'indigenous') {
             initialMessage = `Analyze this street view panorama from an Indigenous perspective. Consider the land's traditional significance and Indigenous context. Location: ${locationData?.address || 'Unknown'}${locationData?.territory ? `, Territory: ${locationData.territory}` : ''}`;
-          } else if (activeAgent === 'proposal') {
-            initialMessage = `Analyze this street view panorama and create a comprehensive development proposal. Location: ${locationData?.address || 'Unknown'}`;
           }
           
-          // Create agent chat with the panorama image path
-          const response = await createAgentChat(activeAgent, initialMessage, panoramaPath);
+          // Create agent chat with the panorama image path and location
+          const response = await createAgentChat(
+            activeAgent, 
+            initialMessage, 
+            panoramaPath,
+            locationData?.lat,
+            locationData?.lon
+          );
           
           // Update the specific thread
           setThreads(prev => ({
@@ -150,6 +232,9 @@ export default function PanoramaViewer({ isOpen, onClose, panoramaPath, location
               ],
             }
           }));
+          
+          // Mark agent as having received a response
+          setAgentHasResponse(prev => ({ ...prev, [activeAgent]: true }));
           
           // Debug: Log the response
           console.log(`Create ${activeAgent} Chat Response:`, {
@@ -188,7 +273,7 @@ export default function PanoramaViewer({ isOpen, onClose, panoramaPath, location
 
       initAgent();
     }
-  }, [isOpen, panoramaPath, activeAgent, currentThread.threadId, locationData]);
+  }, [isOpen, panoramaPath, activeAgent, currentThread.threadId, locationData, threads, workflowInitialized, workflowLoading]);
 
   // Pannellum viewer initialization
   useEffect(() => {
@@ -200,34 +285,36 @@ export default function PanoramaViewer({ isOpen, onClose, panoramaPath, location
         if (pannellumViewerRef.current) {
           try {
             pannellumViewerRef.current.destroy();
-          } catch (e) {
+          } catch {
             // Ignore errors during cleanup
           }
         }
 
-        // Check if pannellum is available on window
-        if (typeof window !== 'undefined' && window.pannellum) {
+        // Check if pannellum is available on window and viewerRef is set
+        if (typeof window !== 'undefined' && window.pannellum && viewerRef.current) {
           // Construct proper URL from file path
           const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001';
           const panoramaUrl = `${API_BASE_URL}/${currentDisplayImage}`;
           
           // Initialize Pannellum viewer
-          pannellumViewerRef.current = window.pannellum.viewer(viewerRef.current, {
-            type: 'equirectangular',
-            panorama: panoramaUrl,
-            autoLoad: true,
-            showControls: true,
-            mouseZoom: true,
-            draggable: true,
-            disableKeyboardCtrl: false,
-            hfov: 100,
-            pitch: 0,
-            yaw: 0,
-            hotSpotDebug: false,
-            compass: false,
-            showFullscreenCtrl: true,
-            showZoomCtrl: true,
-          });
+          if (viewerRef.current) {
+            pannellumViewerRef.current = window.pannellum.viewer(viewerRef.current, {
+              type: 'equirectangular',
+              panorama: panoramaUrl,
+              autoLoad: true,
+              showControls: true,
+              mouseZoom: true,
+              draggable: true,
+              disableKeyboardCtrl: false,
+              hfov: 100,
+              pitch: 0,
+              yaw: 0,
+              hotSpotDebug: false,
+              compass: false,
+              showFullscreenCtrl: true,
+              showZoomCtrl: true,
+            });
+          }
         }
       } catch (error) {
         console.error('Failed to initialize Pannellum:', error);
@@ -317,71 +404,118 @@ export default function PanoramaViewer({ isOpen, onClose, panoramaPath, location
   }, [isDragging]);
 
   const handleSendMessage = async () => {
-    if (!inputMessage.trim() || !currentThread.threadId || loading) return;
-
-    const userMessage = inputMessage.trim();
-    setInputMessage('');
+    if (!inputMessage.trim()) return;
     
-    // Add user message to current thread
-    setThreads(prev => ({
-      ...prev,
-      [activeAgent]: {
-        ...prev[activeAgent],
-        messages: [...prev[activeAgent].messages, { role: 'user', content: userMessage }]
-      }
-    }));
-    setLoading(true);
-
-    try {
-      // Send message to agent
-      const response = await sendAgentMessage(currentThread.threadId, userMessage);
+    if (activeAgent === 'proposal') {
+      // Handle proposal workflow message
+      if (!workflowThreadId || workflowLoading) return;
       
-      // Add assistant response to current thread
+      const userMessage = inputMessage.trim();
+      setInputMessage('');
+      
+      // Add user message to thread
+      setThreads(prev => ({
+        ...prev,
+        proposal: {
+          ...prev.proposal,
+          messages: [...prev.proposal.messages, { role: 'user', content: userMessage }]
+        }
+      }));
+      setWorkflowLoading(true);
+      
+      try {
+        const response = await addWorkflowMessage({
+          thread_id: workflowThreadId,
+          user_message: userMessage
+        });
+        
+        // Update instructions
+        setWorkflowInstructions(response.instructions);
+        
+        // Add assistant response
+        setThreads(prev => ({
+          ...prev,
+          proposal: {
+            ...prev.proposal,
+            messages: [...prev.proposal.messages, { role: 'assistant', content: 'Instructions updated.' }]
+          }
+        }));
+      } catch (error) {
+        console.error('Failed to send workflow message:', error);
+      } finally {
+        setWorkflowLoading(false);
+      }
+    } else {
+      // Handle regular agent message
+      if (!currentThread.threadId || loading) return;
+
+      const userMessage = inputMessage.trim();
+      setInputMessage('');
+      
+      // Add user message to current thread
       setThreads(prev => ({
         ...prev,
         [activeAgent]: {
           ...prev[activeAgent],
-          messages: [...prev[activeAgent].messages, { role: 'assistant', content: response.assistant_response }]
+          messages: [...prev[activeAgent].messages, { role: 'user', content: userMessage }]
         }
       }));
-      
-      // Debug: Log the response
-      console.log(`Add ${activeAgent} Message Response:`, {
-        original: response.original_image_path,
-        vision: response.vision_path,
-        currentHistory: currentThread.imageHistory
-      });
-      
-      // Add new vision to history if generated
-      if (response.vision_path) {
-        console.log('Adding new vision to history:', response.vision_path);
-        const newHistory = [...currentThread.imageHistory, response.vision_path];
-        const newIndex = newHistory.length - 1;
+      setLoading(true);
+
+      try {
+        // Send message to agent
+        const response = await sendAgentMessage(currentThread.threadId, userMessage);
+        
+        // Add assistant response to current thread
         setThreads(prev => ({
           ...prev,
           [activeAgent]: {
             ...prev[activeAgent],
-            imageHistory: newHistory,
-            currentImageIndex: newIndex,
+            messages: [...prev[activeAgent].messages, { role: 'assistant', content: response.assistant_response }]
           }
         }));
-        setCurrentDisplayImage(response.vision_path);
-      }
-      
-    } catch (error) {
-      console.error('Failed to send message:', error);
-      setThreads(prev => ({
-        ...prev,
-        [activeAgent]: {
-          ...prev[activeAgent],
-          messages: [
-            ...prev[activeAgent].messages,
-            { role: 'assistant', content: `Error: ${error instanceof Error ? error.message : 'Failed to send message'}` }
-          ]
+        
+        // Mark agent as having received a response
+        setAgentHasResponse(prev => ({ ...prev, [activeAgent]: true }));
+        
+        // Debug: Log the response
+        console.log(`Add ${activeAgent} Message Response:`, {
+          original: response.original_image_path,
+          vision: response.vision_path,
+          currentHistory: currentThread.imageHistory
+        });
+        
+        // Add new vision to history if generated
+        if (response.vision_path) {
+          console.log('Adding new vision to history:', response.vision_path);
+          const newHistory = [...currentThread.imageHistory, response.vision_path];
+          const newIndex = newHistory.length - 1;
+          setThreads(prev => ({
+            ...prev,
+            [activeAgent]: {
+              ...prev[activeAgent],
+              imageHistory: newHistory,
+              currentImageIndex: newIndex,
+            }
+          }));
+          setCurrentDisplayImage(response.vision_path);
         }
-      }));
-    } finally {
-      setLoading(false);
+        
+      } catch (error) {
+        console.error('Failed to send message:', error);
+        setThreads(prev => ({
+          ...prev,
+          [activeAgent]: {
+            ...prev[activeAgent],
+            messages: [
+              ...prev[activeAgent].messages,
+              { role: 'assistant', content: `Error: ${error instanceof Error ? error.message : 'Failed to send message'}` }
+            ]
+          }
+        }));
+      } finally {
+        setLoading(false);
+      }
     }
   };
 
@@ -513,7 +647,7 @@ export default function PanoramaViewer({ isOpen, onClose, panoramaPath, location
   if (!isOpen || !panoramaPath) return null;
 
   return (
-    <div className="fixed inset-0 z-[3000] bg-black">
+    <div className="fixed inset-0 z-3000 bg-black">
       {/* Custom Scrollbar Styles */}
       <style jsx>{`
         .custom-scrollbar::-webkit-scrollbar {
@@ -533,7 +667,7 @@ export default function PanoramaViewer({ isOpen, onClose, panoramaPath, location
       {/* Close Button */}
       <button
         onClick={handleClose}
-        className="absolute top-4 right-4 z-[3001] text-stone-300 hover:text-white text-xl cursor-pointer"
+        className="absolute top-4 right-4 z-3001 text-stone-300 hover:text-white text-xl cursor-pointer"
         aria-label="Close panorama viewer"
       >
         ×
@@ -609,123 +743,299 @@ export default function PanoramaViewer({ isOpen, onClose, panoramaPath, location
                     Sustainability
                   </button>
                   <button
-                    onClick={() => setActiveAgent('indigenous')}
-                    className={`px-3 py-1.5 rounded text-xs font-medium transition-colors cursor-pointer ${
-                      activeAgent === 'indigenous'
-                        ? 'bg-stone-800 text-white'
-                        : 'text-stone-400 hover:text-white hover:bg-stone-900'
+                    onClick={() => {
+                      if (!agentHasResponse.sustainability) {
+                        alert('⚠️ Please get a response from Sustainability Agent first');
+                        return;
+                      }
+                      setActiveAgent('indigenous');
+                    }}
+                    disabled={!agentHasResponse.sustainability}
+                    className={`px-3 py-1.5 rounded text-xs font-medium transition-colors ${
+                      !agentHasResponse.sustainability
+                        ? 'opacity-50 cursor-not-allowed text-stone-600'
+                        : activeAgent === 'indigenous'
+                        ? 'bg-stone-800 text-white cursor-pointer'
+                        : 'text-stone-400 hover:text-white hover:bg-stone-900 cursor-pointer'
                     }`}
+                    title={!agentHasResponse.sustainability ? 'Get a response from Sustainability Agent first' : ''}
                   >
-                    Indigenous
+                    Indigenous {!agentHasResponse.sustainability && '🔒'}
                   </button>
                   <button
-                    onClick={() => setActiveAgent('proposal')}
-                    className={`px-3 py-1.5 rounded text-xs font-medium transition-colors cursor-pointer ${
-                      activeAgent === 'proposal'
-                        ? 'bg-stone-800 text-white'
-                        : 'text-stone-400 hover:text-white hover:bg-stone-900'
+                    onClick={() => {
+                      if (!agentHasResponse.indigenous) {
+                        alert('⚠️ Please get a response from Indigenous Agent first');
+                        return;
+                      }
+                      setActiveAgent('proposal');
+                    }}
+                    disabled={!agentHasResponse.indigenous}
+                    className={`px-3 py-1.5 rounded text-xs font-medium transition-colors ${
+                      !agentHasResponse.indigenous
+                        ? 'opacity-50 cursor-not-allowed text-stone-600'
+                        : activeAgent === 'proposal'
+                        ? 'bg-stone-800 text-white cursor-pointer'
+                        : 'text-stone-400 hover:text-white hover:bg-stone-900 cursor-pointer'
                     }`}
+                    title={!agentHasResponse.indigenous ? 'Complete Indigenous Agent first' : ''}
                   >
-                    Workflow
+                    Workflow {!agentHasResponse.indigenous && '🔒'}
                   </button>
                 </div>
               </div>
 
-              {/* Chat Messages */}
-              <div className="flex-1 overflow-y-auto p-3 space-y-3 custom-scrollbar">
-                {currentThread.messages.map((message, index) => (
-                  <div key={index}>
-                    <div
-                      className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
+              {/* Content Area - Conditionally render based on active agent */}
+              {activeAgent === 'proposal' ? (
+                // Workflow Interface
+                <>
+                  {/* PDF Download Button - Only on Workflow Tab */}
+                  <div className="px-4 py-2 border-b border-stone-800">
+                    <button
+                      onClick={async () => {
+                        try {
+                          setGeneratingPDF(true);
+                          const { generateSummaryPDF } = await import('@/lib/api');
+                          const result = await generateSummaryPDF(
+                            {
+                              sustainability: threads.sustainability.threadId,
+                              indigenous: threads.indigenous.threadId,
+                              workflow: workflowThreadId,
+                            },
+                            locationData?.address || 'Sustainability Project'
+                          );
+                          // Download PDF
+                          const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001';
+                          window.open(`${API_BASE_URL}${result.pdf_url}`, '_blank');
+                        } catch (error) {
+                          console.error('Failed to generate PDF:', error);
+                          alert('Failed to generate PDF. Please try again.');
+                        } finally {
+                          setGeneratingPDF(false);
+                        }
+                      }}
+                      disabled={generatingPDF || !threads.sustainability.threadId}
+                      className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-stone-700 disabled:cursor-not-allowed text-white px-3 py-2 rounded text-xs font-medium transition-colors flex items-center justify-center gap-2"
                     >
-                      <div
-                        className={`max-w-[85%] rounded-lg px-3 py-2 ${
-                          message.role === 'user'
-                            ? 'bg-stone-800 text-white'
-                            : 'bg-stone-900 text-stone-100 border border-stone-800'
-                        }`}
-                      >
-                        <div className="text-xs font-medium mb-1 text-stone-400">
-                          {message.role === 'user' ? 'You' : getAgentDisplayName(activeAgent)}
-                        </div>
-                        <div className="whitespace-pre-wrap text-sm">{message.content}</div>
-                      </div>
+                      {generatingPDF ? (
+                        <>
+                          <div className="animate-spin rounded-full h-3 w-3 border-2 border-white border-t-transparent"></div>
+                          Generating PDF...
+                        </>
+                      ) : (
+                        <>
+                          📄 Download Summary PDF
+                        </>
+                      )}
+                    </button>
+                  </div>
+
+                  {/* Chat/Instructions Split View */}
+                  <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
+                    {/* Workflow Status */}
+                    <div className="bg-stone-900 border border-stone-800 rounded-lg p-4">
+                      <div className="font-semibold text-white text-sm mb-2">Proposal Workflow</div>
+                      <div className="text-xs text-stone-400">Add stakeholders and adjust proposal details below</div>
                     </div>
-                    
-                    {/* Rating buttons for assistant messages */}
-                    {message.role === 'assistant' && index > 0 && (
-                      <div className="flex justify-start mt-1 ml-2">
-                        <div className="flex gap-1.5 text-xs">
-                          <button
-                            onClick={() => handleRating(index, 1)}
-                            className={`px-2 py-1 rounded transition-colors ${
-                              getRatingForMessage(index) === 1
-                                ? 'bg-stone-700 text-white'
-                                : 'bg-stone-900 text-stone-500 hover:bg-stone-800 hover:text-stone-300'
-                            }`}
-                            title="Helpful response"
-                          >
-                            👍
-                          </button>
-                          <button
-                            onClick={() => handleRating(index, -1)}
-                            className={`px-2 py-1 rounded transition-colors ${
-                              getRatingForMessage(index) === -1
-                                ? 'bg-stone-700 text-white'
-                                : 'bg-stone-900 text-stone-500 hover:bg-stone-800 hover:text-stone-300'
-                            }`}
-                            title="Not helpful"
-                          >
-                            👎
-                          </button>
+
+                    {/* Instructions List */}
+                    {workflowInstructions.length > 0 && (
+                      <div className="bg-stone-900 border border-stone-800 rounded-lg overflow-hidden">
+                        <div className="px-4 py-3 border-b border-stone-800 bg-stone-800">
+                          <div className="font-semibold text-white text-sm">Actions ({workflowInstructions.length})</div>
+                        </div>
+                        <div className="divide-y divide-stone-800">
+                          {workflowInstructions.map((instruction, idx) => (
+                            <div key={idx} className="p-3 hover:bg-stone-800 transition-colors">
+                              <div className="flex items-start gap-3">
+                                <div className="text-stone-400 text-xs font-medium min-w-max pt-0.5">
+                                  {instruction.type === 'email' ? 'EMAIL' : instruction.type === 'meeting' ? 'MEETING' : 'SLACK'}
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                  <div className="font-medium text-white text-xs mb-1 truncate">{instruction.subject}</div>
+                                  <div className="text-xs text-stone-400 mb-1">To: {instruction.target}</div>
+                                  <div className="text-xs text-stone-500 line-clamp-2">{instruction.body}</div>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
                         </div>
                       </div>
                     )}
-                  </div>
-                ))}
 
-                {loading && (
-                  <div className="flex justify-start">
-                    <div className="bg-stone-900 text-stone-100 rounded-lg px-3 py-2 border border-stone-800">
-                      <div className="text-xs font-medium mb-1 text-stone-400">
-                        {getAgentDisplayName(activeAgent)}
+                    {workflowInstructions.length === 0 && !workflowLoading && (
+                      <div className="bg-stone-900 border border-stone-800 rounded-lg p-4 text-center">
+                        <div className="text-xs text-stone-400">No actions yet. Add stakeholders to create workflow steps.</div>
                       </div>
-                      <div className="flex items-center gap-2 text-sm">
-                        <div className="animate-pulse">Analyzing...</div>
-                        <div className="flex gap-1">
-                          <div className="w-1.5 h-1.5 bg-stone-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
-                          <div className="w-1.5 h-1.5 bg-stone-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
-                          <div className="w-1.5 h-1.5 bg-stone-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
+                    )}
+
+                    {workflowLoading && (
+                      <div className="bg-stone-900 border border-stone-800 rounded-lg p-4">
+                        <div className="flex items-center gap-2">
+                          <div className="animate-pulse text-xs text-stone-400">Processing...</div>
+                          <div className="flex gap-1">
+                            <div className="w-1.5 h-1.5 bg-stone-600 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
+                            <div className="w-1.5 h-1.5 bg-stone-600 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
+                            <div className="w-1.5 h-1.5 bg-stone-600 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
+                          </div>
                         </div>
                       </div>
+                    )}
+
+                    <div ref={messagesEndRef} />
+                  </div>
+
+                  {/* Workflow Input */}
+                  <div className="border-t border-stone-800 p-3 bg-stone-900">
+                    <div className="text-xs text-stone-400 mb-2">Add contacts or adjust workflow</div>
+                    <div className="relative">
+                      <input
+                        type="text"
+                        value={inputMessage}
+                        onChange={(e) => setInputMessage(e.target.value)}
+                        onKeyPress={handleKeyPress}
+                        placeholder="e.g., add jane.doe@org.ca as environmental consultant"
+                        disabled={workflowLoading}
+                        className="w-full bg-stone-800 text-white px-3 py-2 pr-10 rounded border border-stone-700 focus:outline-none focus:border-stone-600 disabled:opacity-50 disabled:cursor-not-allowed text-xs placeholder-stone-500"
+                      />
+                      <button
+                        onClick={handleSendMessage}
+                        disabled={!inputMessage.trim() || workflowLoading}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-white hover:text-stone-300 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                      >
+                        →
+                      </button>
                     </div>
                   </div>
-                )}
 
-                <div ref={messagesEndRef} />
-              </div>
+                  {/* Execute Button */}
+                  {workflowInstructions.length > 0 && (
+                    <div className="border-t border-stone-800 px-3 py-2 bg-stone-900">
+                      <button
+                        onClick={async () => {
+                          setWorkflowExecuting(true);
+                          try {
+                            await executeWorkflow(workflowThreadId);
+                            alert('✅ Workflow executed successfully! Returning to map...');
+                            // Close viewer and return to main map after 1 second
+                            setTimeout(() => {
+                              handleClose();
+                            }, 1000);
+                          } catch (error) {
+                            console.error('Execution error:', error);
+                            alert('❌ Workflow execution failed. Please try again.');
+                          } finally {
+                            setWorkflowExecuting(false);
+                          }
+                        }}
+                        disabled={workflowExecuting}
+                        className="w-full bg-green-700 hover:bg-green-600 disabled:bg-stone-800 disabled:opacity-50 text-white text-xs font-medium py-2 rounded transition-colors"
+                      >
+                        {workflowExecuting ? '⏳ Executing...' : '✅ Execute Workflow'}
+                      </button>
+                    </div>
+                  )}
+                </>
+              ) : (
+                // Regular Agent Chat Interface
+                <>
+                  {/* Chat Messages */}
+                  <div className="flex-1 overflow-y-auto p-3 space-y-3 custom-scrollbar">
+                    {currentThread.messages.map((message, index) => (
+                      <div key={index}>
+                        <div
+                          className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                        >
+                          <div
+                            className={`max-w-[85%] rounded-lg px-3 py-2 ${
+                              message.role === 'user'
+                                ? 'bg-stone-800 text-white'
+                                : 'bg-stone-900 text-stone-100 border border-stone-800'
+                            }`}
+                          >
+                            <div className="text-xs font-medium mb-1 text-stone-400">
+                              {message.role === 'user' ? 'You' : getAgentDisplayName(activeAgent)}
+                            </div>
+                            <div className="whitespace-pre-wrap text-sm">{message.content}</div>
+                          </div>
+                        </div>
+                        
+                        {/* Rating buttons for assistant messages */}
+                        {message.role === 'assistant' && index > 0 && (
+                          <div className="flex justify-start mt-1 ml-2">
+                            <div className="flex gap-1.5 text-xs">
+                              <button
+                                onClick={() => handleRating(index, 1)}
+                                className={`px-2 py-1 rounded transition-colors ${
+                                  getRatingForMessage(index) === 1
+                                    ? 'bg-green-700 text-white'
+                                    : 'bg-stone-900 text-stone-500 hover:bg-stone-800 hover:text-green-400'
+                                }`}
+                                title="Helpful response"
+                              >
+                                👍
+                              </button>
+                              <button
+                                onClick={() => handleRating(index, -1)}
+                                className={`px-2 py-1 rounded transition-colors ${
+                                  getRatingForMessage(index) === -1
+                                    ? 'bg-red-700 text-white'
+                                    : 'bg-stone-900 text-stone-500 hover:bg-stone-800 hover:text-red-400'
+                                }`}
+                                title="Not helpful"
+                              >
+                                👎
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ))}
 
-              {/* Input Area */}
-              <div className="border-t border-stone-800 p-3">
-                <div className="relative">
-                  <input
-                    type="text"
-                    value={inputMessage}
-                    onChange={(e) => setInputMessage(e.target.value)}
-                    onKeyPress={handleKeyPress}
-                    placeholder={getInputPlaceholder(activeAgent)}
-                    disabled={loading}
-                    className="w-full bg-stone-900 text-white px-3 py-2 pr-10 rounded-lg border border-stone-800 focus:outline-none focus:border-stone-600 disabled:opacity-50 disabled:cursor-not-allowed text-sm placeholder-stone-500"
-                  />
-                  <button
-                    onClick={handleSendMessage}
-                    disabled={!inputMessage.trim() || loading}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 text-white hover:text-stone-300 disabled:opacity-30 disabled:cursor-not-allowed transition-colors text-lg"
-                  >
-                    →
-                  </button>
-                </div>
-              </div>
+                    {loading && (
+                      <div className="flex justify-start">
+                        <div className="bg-stone-900 text-stone-100 rounded-lg px-3 py-2 border border-stone-800">
+                          <div className="text-xs font-medium mb-1 text-stone-400">
+                            {getAgentDisplayName(activeAgent)}
+                          </div>
+                          <div className="flex items-center gap-2 text-sm">
+                            <div className="animate-pulse">Analyzing...</div>
+                            <div className="flex gap-1">
+                              <div className="w-1.5 h-1.5 bg-stone-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
+                              <div className="w-1.5 h-1.5 bg-stone-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
+                              <div className="w-1.5 h-1.5 bg-stone-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    <div ref={messagesEndRef} />
+                  </div>
+
+                  {/* Input Area */}
+                  <div className="border-t border-stone-800 p-3">
+                    <div className="relative">
+                      <input
+                        type="text"
+                        value={inputMessage}
+                        onChange={(e) => setInputMessage(e.target.value)}
+                        onKeyPress={handleKeyPress}
+                        placeholder={getInputPlaceholder(activeAgent)}
+                        disabled={loading}
+                        className="w-full bg-stone-900 text-white px-3 py-2 pr-10 rounded-lg border border-stone-800 focus:outline-none focus:border-stone-600 disabled:opacity-50 disabled:cursor-not-allowed text-sm placeholder-stone-500"
+                      />
+                      <button
+                        onClick={handleSendMessage}
+                        disabled={!inputMessage.trim() || loading}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-white hover:text-stone-300 disabled:opacity-30 disabled:cursor-not-allowed transition-colors text-lg"
+                      >
+                        →
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
             </>
         </div>
       </div>

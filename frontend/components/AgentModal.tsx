@@ -126,7 +126,7 @@ export default function AgentModal({ isOpen, onClose, panoramaPath, locationData
             : 'What are the key indigenous perspectives to consider for land development?';
         }
 
-        const response = await createAgentChat(agent, initialMessage, imagePath);
+        const response = await createAgentChat(agent, initialMessage, imagePath, locationData?.lat, locationData?.lon);
 
         setThreads(prev => ({
           ...prev,

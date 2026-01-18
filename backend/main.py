@@ -21,6 +21,7 @@ from agents.specialized_agents import SustainabilityAgent, IndigenousContextAgen
 from agents.confirmation_service import ConfirmationService, ActionType
 
 from database import get_database, close_database, get_collection
+from routes.proposal_workflow import router as proposal_workflow_router
 from utils.geo_queries import (
     find_near_point,
     find_all_near_point,
@@ -57,6 +58,9 @@ threads: Dict[str, Dict] = {}
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
+# Include routers FIRST before mounting static files
+app.include_router(proposal_workflow_router)
+
 # Mount static files directory to serve uploaded images
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
@@ -90,6 +94,8 @@ class ChatRequest(BaseModel):
     message: Optional[str] = None  # Optional for create endpoints
     image_path: Optional[str] = None  # Optional image path for sustainability agent
     user_id: Optional[str] = None  # For personalization
+    lat: Optional[float] = None  # Latitude for metrics context
+    lon: Optional[float] = None  # Longitude for metrics context
 
 
 class RatingRequest(BaseModel):
@@ -135,11 +141,15 @@ async def shutdown_event():
 @app.get("/")
 async def root():
     """Health check endpoint"""
+    # List all registered routes
+    routes = [{"path": route.path, "methods": route.methods} for route in app.routes]
     return {
         "status": "ok",
         "message": "Indigenous Land Perspectives API",
         "version": "1.0.0",
-        "database": "connected"
+        "database": "connected",
+        "routes_count": len(routes),
+        "proposal_workflow_loaded": any("/proposal-workflow" in route.path for route in app.routes)
     }
 
 
@@ -475,8 +485,45 @@ def create_chat(request: ChatRequest) -> ChatResponse:
     else:
         raise HTTPException(status_code=400, detail="Invalid agent. Use 'sustainability', 'indigenous', or 'proposal'")
 
+    # Fetch metrics context if lat/lon provided
+    metrics_context = ""
+    if request.lat and request.lon:
+        try:
+            from utils.geospatial_metrics import get_analyzer
+            from utils.geo_queries import find_containing_territory, get_nearest_first_nation
+            
+            analyzer = get_analyzer()
+            ecological_score = analyzer.calculate_ecological_sensitivity_score(request.lat, request.lon)
+            territory = find_containing_territory(request.lon, request.lat)
+            nearest_fn = get_nearest_first_nation(request.lon, request.lat)
+            
+            # Build metrics context string
+            metrics_context = f"""LOCATION METRICS:
+- ESA Score: {ecological_score.get('esa_score', 'N/A')}/10 (Distance to ESA: {ecological_score.get('esa_distance_km', 'N/A')} km)
+- Green Space Score: {ecological_score.get('green_space_score', 'N/A')}/10 (Distance: {ecological_score.get('green_distance_km', 'N/A')} km)
+- Tree Score: {ecological_score.get('tree_score', 'N/A')}/10
+- Total Ecological Score: {ecological_score.get('total_score', 'N/A')}/30
+- Nearest ESA: {ecological_score.get('nearest_esa', 'N/A')}
+- Nearest Green Space: {ecological_score.get('nearest_green_space', 'N/A')}"""
+            
+            if territory:
+                metrics_context += f"\n- Indigenous Territory: {territory.get('name', 'Unknown')}"
+            if nearest_fn:
+                metrics_context += f"\n- Nearest First Nation: {nearest_fn.get('name', 'Unknown')} ({nearest_fn.get('distance_km', 'N/A')} km away)"
+                
+        except Exception as e:
+            print(f"Error fetching metrics context: {e}")
+            metrics_context = ""
+
     # Store agent in thread storage with image path if provided
-    thread_data = {"agent": agent, "image_path": request.image_path}
+    thread_data = {
+        "agent": agent, 
+        "image_path": request.image_path,
+        "lat": request.lat,
+        "lon": request.lon,
+        "metrics_context": metrics_context,
+        "has_generated_image": False,
+    }
     threads[thread_id] = thread_data
 
     # Use provided message or agent-specific default
@@ -542,10 +589,16 @@ def start_chat(threadid: str = Query(...), request: ChatRequest = Body(...)) -> 
     thread_data = threads[threadid]
     agent = thread_data["agent"]
     image_path = thread_data.get("image_path")
+    
+    # Get metrics context if available
+    metrics_context = thread_data.get("metrics_context", "")
 
     agent.add_message("user", request.message)
     agent_name = type(agent).__name__
     vision_path = None
+    
+    # DON'T enforce image generation - let users switch freely after getting any response
+    # The enforcement is now handled on frontend based on whether agent has responded
 
     try:
         if agent_name == "SustainabilityAgent":
@@ -553,12 +606,23 @@ def start_chat(threadid: str = Query(...), request: ChatRequest = Body(...)) -> 
             if image_path:
                 import time
                 vision_output_path = f"{UPLOAD_DIR}/vision_{threadid}_{int(time.time())}.png"
+                
+                # Use the latest vision image if it exists, otherwise use original
+                current_vision = thread_data.get("vision_path")
+                input_image = current_vision if current_vision else image_path
+                
+                # Build context with metrics
+                full_context = request.message
+                if metrics_context:
+                    full_context = f"{metrics_context}\n\nUser request: {request.message}"
+                
                 analysis_result = agent.run_full_analysis(
-                    image_path,
-                    context=request.message,
+                    input_image,
+                    context=full_context,
                     vision_output_path=vision_output_path
                 )
                 thread_data["vision_path"] = analysis_result.get("future_vision_path")
+                thread_data["has_generated_image"] = True
                 vision_path = analysis_result.get("future_vision_path")
                 
                 # Build response from analysis
@@ -566,10 +630,14 @@ def start_chat(threadid: str = Query(...), request: ChatRequest = Body(...)) -> 
                     analysis_result.get("redesign_suggestions", [])
                 )
             else:
-                context = f"Image path: {image_path}" if image_path else ""
+                context = metrics_context if metrics_context else ""
+                if image_path:
+                    context += f"\nImage path: {image_path}"
                 response = agent.chat_with_context(request.message, context=context)
         elif agent_name == "IndigenousContextAgent":
-            response = agent.chat_with_context(request.message)
+            # Add metrics context to indigenous agent
+            context = metrics_context if metrics_context else ""
+            response = agent.chat_with_context(request.message, context=context)
         elif agent_name == "ProposalWorkflowAgent":
             response = agent.chat_with_context(request.message)
         else:
@@ -1871,6 +1939,102 @@ def get_analytics_summary():
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get analytics summary: {str(e)}")
+
+
+@app.post("/api/generate-summary-pdf")
+def generate_summary_pdf(
+    thread_ids: Dict[str, str] = Body(..., description="Dict with sustainability_thread_id, indigenous_thread_id, workflow_thread_id"),
+    project_name: str = Body(...),
+) -> Dict[str, str]:
+    """
+    Generate a comprehensive PDF summary with all agent conversations and images.
+    
+    Expected body:
+    {
+        "thread_ids": {
+            "sustainability": "thread-id-1",
+            "indigenous": "thread-id-2", 
+            "workflow": "thread-id-3"
+        },
+        "project_name": "My Sustainability Project"
+    }
+    """
+    try:
+        from utils.pdf_generator import generate_workflow_pdf
+        import time
+        
+        # Collect conversation history from all threads
+        sustainability_conv = []
+        indigenous_conv = []
+        workflow_conv = []
+        location_data = {}
+        metrics = {}
+        original_image = None
+        future_vision = None
+        
+        # Get sustainability thread data
+        sust_id = thread_ids.get("sustainability")
+        if sust_id and sust_id in threads:
+            thread_data = threads[sust_id]
+            agent = thread_data["agent"]
+            sustainability_conv = [{"role": msg["role"], "content": msg["content"]} for msg in agent._history]
+            original_image = thread_data.get("image_path")
+            future_vision = thread_data.get("vision_path")
+            
+            # Get location data
+            if thread_data.get("lat") and thread_data.get("lon"):
+                from utils.geo_queries import find_containing_territory, get_nearest_first_nation
+                from utils.geospatial_metrics import get_analyzer
+                
+                lat, lon = thread_data["lat"], thread_data["lon"]
+                location_data = {
+                    "lat": lat,
+                    "lon": lon,
+                    "territory": find_containing_territory(lon, lat),
+                    "nearest_first_nation": get_nearest_first_nation(lon, lat),
+                }
+                analyzer = get_analyzer()
+                metrics = analyzer.calculate_ecological_sensitivity_score(lat, lon)
+        
+        # Get indigenous thread data
+        indig_id = thread_ids.get("indigenous")
+        if indig_id and indig_id in threads:
+            agent = threads[indig_id]["agent"]
+            indigenous_conv = [{"role": msg["role"], "content": msg["content"]} for msg in agent._history]
+        
+        # Get workflow thread data
+        workflow_id = thread_ids.get("workflow")
+        if workflow_id and workflow_id in threads:
+            agent = threads[workflow_id]["agent"]
+            workflow_conv = [{"role": msg["role"], "content": msg["content"]} for msg in agent._history]
+        
+        # Generate PDF
+        output_filename = f"summary_{int(time.time())}.pdf"
+        output_path = f"{UPLOAD_DIR}/{output_filename}"
+        
+        generate_workflow_pdf(
+            output_path=output_path,
+            project_name=project_name,
+            location_data=location_data,
+            sustainability_conversation=sustainability_conv,
+            indigenous_conversation=indigenous_conv,
+            workflow_conversation=workflow_conv,
+            original_image_path=original_image,
+            future_vision_path=future_vision,
+            metrics=metrics,
+        )
+        
+        return {
+            "status": "success",
+            "pdf_path": output_path,
+            "pdf_url": f"/uploads/{output_filename}",
+            "message": "PDF generated successfully"
+        }
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to generate PDF: {str(e)}")
+
 
 
 @app.get("/api/analytics/correlations/{user_id}")

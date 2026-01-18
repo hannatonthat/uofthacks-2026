@@ -426,7 +426,7 @@ class IndigenousContextAgent(BaseAgent):
 			print(f"[!] Backboard initialization failed: {e}")
 			print(f"  Will use local fallback for responses")
 
-	def chat_with_context(self, user_query: str) -> str:
+	def chat_with_context(self, user_query: str, context: str = "") -> str:
 		"""
 		MAIN ENTRY POINT: Chat with indigenous context expert.
 		
@@ -441,6 +441,7 @@ class IndigenousContextAgent(BaseAgent):
 		PARAMETERS:
 		  user_query: User's question about indigenous perspectives
 		             Example: "What water resources should we protect?"
+		  context: Optional context string (e.g., location metrics, territory info)
 		
 		RETURNS:
 		  Claude's response string (or error message)
@@ -456,8 +457,14 @@ class IndigenousContextAgent(BaseAgent):
 		  agent.chat_with_context("How do we protect them?")  # Uses same thread
 		  # Backboard remembers both messages and context
 		"""
+		# Prepend context to user query if provided
+		if context:
+			full_query = f"{context}\n\n{user_query}"
+		else:
+			full_query = user_query
+			
 		if self.backboard and self.assistant_id:
-			return self._backboard_chat(user_query)
+			return self._backboard_chat(full_query)
 		else:
 			# No local fallback - require explicit Backboard setup
 			raise RuntimeError(

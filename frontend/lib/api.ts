@@ -217,7 +217,9 @@ export async function generatePanorama(
 export async function createAgentChat(
   agent: 'sustainability' | 'indigenous' | 'proposal',
   message?: string,
-  imagePath?: string
+  imagePath?: string,
+  lat?: number,
+  lon?: number
 ): Promise<ChatResponse> {
   // Import getDeviceId dynamically
   const { getDeviceId } = await import('./amplitude');
@@ -232,6 +234,8 @@ export async function createAgentChat(
       message,
       image_path: imagePath,
       user_id: getDeviceId(),
+      lat,
+      lon,
     }),
   });
   
@@ -346,6 +350,35 @@ export async function deleteThread(threadId: string): Promise<any> {
   
   if (!response.ok) {
     throw new Error(`Failed to delete thread: ${response.statusText}`);
+  }
+  
+  return response.json();
+}
+
+/**
+ * Generate summary PDF with all conversations and images
+ */
+export async function generateSummaryPDF(
+  threadIds: {
+    sustainability?: string;
+    indigenous?: string;
+    workflow?: string;
+  },
+  projectName: string
+): Promise<{ pdf_url: string; pdf_path: string }> {
+  const response = await fetch(`${API_BASE_URL}/api/generate-summary-pdf`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      thread_ids: threadIds,
+      project_name: projectName,
+    }),
+  });
+  
+  if (!response.ok) {
+    throw new Error(`Failed to generate PDF: ${response.statusText}`);
   }
   
   return response.json();
