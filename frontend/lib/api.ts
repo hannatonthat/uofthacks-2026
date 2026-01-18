@@ -219,6 +219,9 @@ export async function createAgentChat(
   message?: string,
   imagePath?: string
 ): Promise<ChatResponse> {
+  // Import getDeviceId dynamically
+  const { getDeviceId } = await import('./amplitude');
+  
   const response = await fetch(`${API_BASE_URL}/create-chat`, {
     method: 'POST',
     headers: {
@@ -228,6 +231,7 @@ export async function createAgentChat(
       agent,
       message,
       image_path: imagePath,
+      user_id: getDeviceId(),
     }),
   });
   

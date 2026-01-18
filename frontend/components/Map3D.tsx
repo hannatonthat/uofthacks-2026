@@ -5,6 +5,7 @@ import Map, { MapRef, Layer, type MapMouseEvent } from 'react-map-gl/mapbox';
 import { getRegionData, RegionData, generatePanorama } from '@/lib/api';
 import AgentModal from './AgentModal';
 import PanoramaViewer from './PanoramaViewer';
+import { trackMapRegionClicked, trackMapZoom } from '@/lib/amplitude';
 import 'mapbox-gl/dist/mapbox-gl.css';
 
 // GTA bounds
@@ -199,6 +200,17 @@ export default function Map3D() {
     try {
       const data = await getRegionData(lngLat.lat, lngLat.lng, 500);
       setRegionData(data);
+      
+      // Track map region clicked with Amplitude
+      trackMapRegionClicked(
+        {
+          lat: lngLat.lat,
+          lon: lngLat.lng,
+          address: address,
+          territory: data.indigenous_territory?.Name,
+        },
+        data.ecological_score?.normalized_score
+      );
       
       // Fly to clicked location
       mapRef.current?.flyTo({

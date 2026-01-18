@@ -2,6 +2,14 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { createAgentChat, sendAgentMessage, ChatMessage, ChatResponse } from '@/lib/api';
+import { 
+  trackAgentChatStarted, 
+  trackAgentMessageSent, 
+  trackAgentResponseReceived,
+  trackAgentResponseRated,
+  getDeviceId,
+  LocationData
+} from '@/lib/amplitude';
 
 interface AgentModalProps {
   isOpen: boolean;
@@ -23,6 +31,11 @@ interface AgentThread {
   loading: boolean;
 }
 
+interface MessageRating {
+  messageIndex: number;
+  rating: 1 | -1;
+}
+
 export default function AgentModal({ isOpen, onClose, panoramaPath, locationData }: AgentModalProps) {
   const [activeAgent, setActiveAgent] = useState<AgentType>('sustainability');
   const [threads, setThreads] = useState<Record<AgentType, AgentThread>>({
@@ -32,6 +45,11 @@ export default function AgentModal({ isOpen, onClose, panoramaPath, locationData
   });
   const [inputMessage, setInputMessage] = useState('');
   const [isMinimized, setIsMinimized] = useState(false);
+  const [ratings, setRatings] = useState<Record<AgentType, MessageRating[]>>({
+    sustainability: [],
+    indigenous: [],
+    proposal: [],
+  });
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
@@ -68,7 +86,23 @@ export default function AgentModal({ isOpen, onClose, panoramaPath, locationData
         initialMessage = `What are the steps in the proposal workflow for a project at ${locationData?.address || 'this location'}?`;
       }
 
+      const startTime = Date.now();
       const response = await createAgentChat(agent, initialMessage, imagePath);
+      const responseTime = Date.now() - startTime;
+
+      // Track agent chat started
+      const location: LocationData | undefined = locationData ? {
+        lat: locationData.lat,
+        lon: locationData.lon,
+        territory: locationData.territory,
+        address: locationData.address,
+      } : undefined;
+      
+      trackAgentChatStarted(agent, response.thread_id, location);
+      
+      // Track initial message and response
+      trackAgentMessageSent(agent, response.thread_id, initialMessage, 0);
+      trackAgentResponseReceived(agent, response.thread_id, response.assistant_response.length, 0, responseTime);
 
       setThreads(prev => ({
         ...prev,
@@ -124,7 +158,16 @@ export default function AgentModal({ isOpen, onClose, panoramaPath, locationData
     }));
 
     try {
+      // Track message sent
+      const messageIndex = currentThread.messages.length;
+      trackAgentMessageSent(activeAgent, currentThread.threadId, userMessage, messageIndex);
+      
+      const startTime = Date.now();
       const response = await sendAgentMessage(currentThread.threadId, userMessage);
+      const responseTime = Date.now() - startTime;
+      
+      // Track response received
+      trackAgentResponseReceived(activeAgent, currentThread.threadId, response.assistant_response.length, messageIndex, responseTime);
 
       setThreads(prev => ({
         ...prev,
@@ -158,6 +201,75 @@ export default function AgentModal({ isOpen, onClose, panoramaPath, locationData
       e.preventDefault();
       handleSendMessage();
     }
+  };
+
+  const handleRating = async (messageIndex: number, rating: 1 | -1) => {
+    const currentThread = threads[activeAgent];
+    if (!currentThread.threadId) return;
+
+    // Find the user message and agent response
+    const userMessage = currentThread.messages[messageIndex - 1]?.content || '';
+    const agentResponse = currentThread.messages[messageIndex]?.content || '';
+
+    // Update local state
+    setRatings(prev => ({
+      ...prev,
+      [activeAgent]: [
+        ...prev[activeAgent].filter(r => r.messageIndex !== messageIndex),
+        { messageIndex, rating }
+      ]
+    }));
+
+    // Track with Amplitude
+    const location: LocationData | undefined = locationData ? {
+      lat: locationData.lat,
+      lon: locationData.lon,
+      territory: locationData.territory,
+      address: locationData.address,
+    } : undefined;
+
+    trackAgentResponseRated(
+      activeAgent,
+      currentThread.threadId,
+      messageIndex,
+      rating,
+      userMessage,
+      agentResponse,
+      location
+    );
+
+    // Send to backend for storage and AI analysis
+    try {
+      const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+      await fetch(`${API_BASE_URL}/api/ratings`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          user_id: getDeviceId(),
+          thread_id: currentThread.threadId,
+          agent_type: activeAgent,
+          message_index: messageIndex,
+          rating,
+          context: {
+            user_message: userMessage,
+            agent_response: agentResponse,
+            location: locationData ? {
+              lat: locationData.lat,
+              lon: locationData.lon,
+            } : undefined,
+          }
+        }),
+      });
+    } catch (error) {
+      console.error('Failed to save rating:', error);
+    }
+  };
+
+  const getRatingForMessage = (messageIndex: number): 1 | -1 | null => {
+    const rating = ratings[activeAgent].find(r => r.messageIndex === messageIndex);
+    return rating ? rating.rating : null;
   };
 
   if (!isOpen) return null;
@@ -226,22 +338,53 @@ export default function AgentModal({ isOpen, onClose, panoramaPath, locationData
                 )}
 
                 {currentThread.messages.map((message, index) => (
-                  <div
-                    key={index}
-                    className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                  >
+                  <div key={index}>
                     <div
-                      className={`max-w-[80%] rounded-lg px-4 py-2 ${
-                        message.role === 'user'
-                          ? 'bg-blue-600 text-white'
-                          : 'bg-gray-800 text-gray-100'
-                      }`}
+                      className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
                     >
-                      <div className="text-xs font-semibold mb-1 opacity-75">
-                        {message.role === 'user' ? 'You' : agentNames[activeAgent]}
+                      <div
+                        className={`max-w-[80%] rounded-lg px-4 py-2 ${
+                          message.role === 'user'
+                            ? 'bg-blue-600 text-white'
+                            : 'bg-gray-800 text-gray-100'
+                        }`}
+                      >
+                        <div className="text-xs font-semibold mb-1 opacity-75">
+                          {message.role === 'user' ? 'You' : agentNames[activeAgent]}
+                        </div>
+                        <div className="whitespace-pre-wrap text-sm">{message.content}</div>
                       </div>
-                      <div className="whitespace-pre-wrap text-sm">{message.content}</div>
                     </div>
+                    
+                    {/* Rating buttons for assistant messages */}
+                    {message.role === 'assistant' && index > 0 && (
+                      <div className="flex justify-start mt-1 ml-2">
+                        <div className="flex gap-2 text-xs">
+                          <button
+                            onClick={() => handleRating(index, 1)}
+                            className={`px-2 py-1 rounded transition-colors ${
+                              getRatingForMessage(index) === 1
+                                ? 'bg-green-600 text-white'
+                                : 'bg-gray-700 text-gray-400 hover:bg-gray-600 hover:text-white'
+                            }`}
+                            title="Helpful response"
+                          >
+                            👍
+                          </button>
+                          <button
+                            onClick={() => handleRating(index, -1)}
+                            className={`px-2 py-1 rounded transition-colors ${
+                              getRatingForMessage(index) === -1
+                                ? 'bg-red-600 text-white'
+                                : 'bg-gray-700 text-gray-400 hover:bg-gray-600 hover:text-white'
+                            }`}
+                            title="Not helpful"
+                          >
+                            👎
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ))}
 
