@@ -22,9 +22,35 @@ interface MapPoint {
   address?: string;
 }
 
-export default function Map3D() {
+interface Map3DProps {
+  onGetStarted?: () => void;
+}
+
+// Helper function to convert ALL CAPS to Title Case
+const toTitleCase = (str: string): string => {
+  return str.toLowerCase().replace(/\b\w/g, (char) => char.toUpperCase());
+};
+
+export default function Map3D({ onGetStarted }: Map3DProps) {
   const mapRef = useRef<MapRef>(null);
   const [selectedPoint, setSelectedPoint] = useState<MapPoint | null>(null);
+  
+  // Custom scrollbar styles
+  const scrollbarStyles = `
+    .custom-scrollbar::-webkit-scrollbar {
+      width: 8px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-track {
+      background: #000000;
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb {
+      background: #292524;
+      border-radius: 4px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+      background: #44403c;
+    }
+  `;
   const [regionData, setRegionData] = useState<RegionData | null>(null);
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -34,30 +60,103 @@ export default function Map3D() {
   const [panoramaLoading, setPanoramaLoading] = useState(false);
   const [agentModalOpen, setAgentModalOpen] = useState(false);
   const [panoramaViewerOpen, setPanoramaViewerOpen] = useState(false);
+  const [showGettingStarted, setShowGettingStarted] = useState(true);
+  const [animateMetrics, setAnimateMetrics] = useState(false);
   const [viewport, setViewport] = useState({
-    latitude: GTA_CENTER[1],
-    longitude: GTA_CENTER[0],
-    zoom: 10,
-    pitch: 45,  // Tilted view
-    bearing: 0,
-    minZoom: 9,   // Prevent zooming out too far
-    maxZoom: 18,  // Max zoom level
+    latitude: 20,  // Start viewing from above the equator
+    longitude: 0,   // Start centered on prime meridian
+    zoom: 1.5,      // Zoomed out to see whole globe
+    pitch: 0,       // Flat view initially
+    bearing: -20,   // Slight rotation for dramatic effect
+    minZoom: 0,     // Allow full zoom out to see globe
+    maxZoom: 20,    // Max zoom level
   });
 
-  // Initial fly-to animation
+
+  // Toggle text labels based on getting started state
   useEffect(() => {
+    if (!mapRef.current) return;
+    
+    const map = mapRef.current.getMap();
+    if (!map.isStyleLoaded()) return;
+    
+    const style = map.getStyle();
+    if (style && style.layers) {
+      style.layers.forEach((layer) => {
+        if (layer.type === 'symbol' && layer.id) {
+          try {
+            map.setLayoutProperty(
+              layer.id, 
+              'visibility', 
+              showGettingStarted ? 'none' : 'visible'
+            );
+          } catch (e) {
+            // Ignore errors for layers that don't support visibility
+          }
+        }
+      });
+    }
+  }, [showGettingStarted]);
+
+  // Slow globe rotation animation before getting started
+  useEffect(() => {
+    if (!showGettingStarted) return;
+
+    let animationFrame: number;
+    let currentLongitude = 0; // Start longitude
+
+    const rotateGlobe = () => {
+      currentLongitude += 0.1; // Slow rotation speed (degrees per frame)
+      if (currentLongitude >= 180) currentLongitude = -180;
+
+      setViewport(prev => ({
+        ...prev,
+        longitude: currentLongitude,
+        bearing: -20  // Keep slight angle for visual interest
+      }));
+      
+      animationFrame = requestAnimationFrame(rotateGlobe);
+    };
+
+    // Start rotation after a short delay to let map load
     const timer = setTimeout(() => {
+      animationFrame = requestAnimationFrame(rotateGlobe);
+    }, 1000);
+
+    return () => {
+      clearTimeout(timer);
+      if (animationFrame) cancelAnimationFrame(animationFrame);
+    };
+  }, [showGettingStarted]);
+
+  // Trigger zoom animation when Getting Started is clicked
+  const handleGetStarted = () => {
+    setShowGettingStarted(false);
+    onGetStarted?.(); // Notify parent component
+    
+    setTimeout(() => {
       mapRef.current?.flyTo({
         center: GTA_CENTER,
-        zoom: 10,
-        pitch: 45,
-        duration: 2000,
+        zoom: 11,
+        pitch: 50,
+        bearing: 0,
+        duration: 4000,  // 4 second dramatic zoom
         essential: true,
       });
-    }, 500);
+    }, 300);
+  };
 
-    return () => clearTimeout(timer);
-  }, []);
+  // Animate metrics when regionData changes
+  useEffect(() => {
+    if (regionData) {
+      setAnimateMetrics(false);
+      // Slight delay before triggering animation
+      const timer = setTimeout(() => {
+        setAnimateMetrics(true);
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [regionData]);
 
   // Search for addresses (forward geocoding)
   const searchAddress = async (query: string) => {
@@ -70,7 +169,6 @@ export default function Map3D() {
       const response = await fetch(
         `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query)}.json?` +
         `access_token=${process.env.NEXT_PUBLIC_MAPBOX_TOKEN}&` +
-        `bbox=${GTA_BOUNDS[0][0]},${GTA_BOUNDS[0][1]},${GTA_BOUNDS[1][0]},${GTA_BOUNDS[1][1]}&` +
         `limit=5`
       );
 
@@ -171,17 +269,6 @@ export default function Map3D() {
   // Handle map click - anywhere on the map
   const handleMapClick = async (event: MapMouseEvent) => {
     const { lngLat } = event;
-    
-    // Check if clicked within GTA bounds
-    if (
-      lngLat.lng < GTA_BOUNDS[0][0] ||
-      lngLat.lng > GTA_BOUNDS[1][0] ||
-      lngLat.lat < GTA_BOUNDS[0][1] ||
-      lngLat.lat > GTA_BOUNDS[1][1]
-    ) {
-      console.log('Click outside GTA bounds');
-      return;
-    }
 
     console.log('Map clicked at:', lngLat.lat, lngLat.lng);
 
@@ -243,48 +330,117 @@ export default function Map3D() {
 
   return (
     <div className="relative w-full h-full">
-      {/* Search Bar */}
-      <div className="absolute top-4 left-4 z-[1000] w-80">
-        <div className="relative">
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={handleSearchChange}
-            onFocus={() => searchSuggestions.length > 0 && setShowSuggestions(true)}
-            placeholder="Search address in GTA..."
-            className="w-full px-4 py-3 bg-black/90 text-white border border-gray-700 rounded-lg focus:outline-none focus:border-gray-500 placeholder-gray-500"
-          />
+      {/* Custom Scrollbar Styles */}
+      <style dangerouslySetInnerHTML={{ __html: scrollbarStyles }} />
+      
+      {/* Getting Started Button Overlay */}
+      {showGettingStarted && (
+        <div className="absolute inset-0 z-[2000] flex items-center justify-center">
+          <div className="text-center">
+            <h1 className="text-6xl font-bold text-white mb-3 drop-shadow-2xl tracking-tight">REMAP</h1>
+            <p className="text-2xl text-white mb-4 drop-shadow-lg font-light">Land before lines</p>
+            <button
+              onClick={handleGetStarted}
+              className="text-white text-sm font-light cursor-pointer transition-all duration-200 flex items-center gap-1 mx-auto bg-black px-4 py-2 rounded-lg hover:scale-102 hover:shadow-[0_0_16px_rgba(255,255,255,0.5)]"
+            >
+              Explore <span>→</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Profile Icon - Only show after getting started */}
+      {!showGettingStarted && (
+        <a
+          href="/insights"
+          className="absolute top-4 left-4 z-[1000] w-10 h-10 bg-black border border-white/20 rounded-full flex items-center justify-center text-white hover:shadow-[0_0_16px_rgba(255,255,255,0.5)] transition-all duration-300 cursor-pointer"
+        >
+          <svg
+            className="w-5 h-5"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"
+            />
+          </svg>
+        </a>
+      )}
+
+      {/* Search Bar - Only show after getting started */}
+      {!showGettingStarted && (
+        <div className="absolute top-4 left-16 z-[1000] w-64">
+          <div className="relative">
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={handleSearchChange}
+              onFocus={() => searchSuggestions.length > 0 && setShowSuggestions(true)}
+              placeholder="Search..."
+              className="w-full px-4 py-2 bg-black text-white border border-white/20 rounded-lg focus:outline-none focus:shadow-[0_0_16px_rgba(255,255,255,0.5)] placeholder-stone-400 transition-all duration-300"
+            />
           
           {/* Search Suggestions Dropdown */}
           {showSuggestions && searchSuggestions.length > 0 && (
-            <div className="absolute top-full mt-2 w-full bg-black/95 border border-gray-700 rounded-lg overflow-hidden shadow-xl">
+            <div className="absolute top-full mt-2 w-full bg-black border border-white/20 rounded-lg overflow-hidden shadow-[0_0_20px_rgba(0,0,0,0.8)]">
               {searchSuggestions.map((suggestion, index) => (
                 <button
                   key={index}
                   onClick={() => handleSelectAddress(suggestion)}
-                  className="w-full px-4 py-3 text-left text-white hover:bg-gray-800 border-b border-gray-800 last:border-b-0 transition-colors"
+                  className="w-full px-4 py-3 text-left text-white hover:bg-white/10 border-b border-white/10 last:border-b-0 transition-all duration-300 cursor-pointer"
                 >
                   <div className="font-medium text-sm">{suggestion.text}</div>
-                  <div className="text-xs text-gray-400 mt-1">{suggestion.place_name}</div>
+                  <div className="text-xs text-stone-400 mt-1">{suggestion.place_name}</div>
                 </button>
               ))}
             </div>
           )}
         </div>
-      </div>
+        </div>
+      )}
 
       <Map
         ref={mapRef}
         {...viewport}
-        onMove={(evt) => setViewport(evt.viewState)}
+        onMove={(evt) => setViewport({
+          latitude: evt.viewState.latitude,
+          longitude: evt.viewState.longitude,
+          zoom: evt.viewState.zoom,
+          pitch: evt.viewState.pitch,
+          bearing: evt.viewState.bearing,
+          minZoom: 0,
+          maxZoom: 20
+        })}
         onClick={handleMapClick}
         mapStyle="mapbox://styles/mapbox/dark-v11"
+        onLoad={() => {
+          // Hide labels on initial load
+          if (showGettingStarted && mapRef.current) {
+            const map = mapRef.current.getMap();
+            const style = map.getStyle();
+            if (style && style.layers) {
+              style.layers.forEach((layer) => {
+                if (layer.type === 'symbol' && layer.id) {
+                  try {
+                    map.setLayoutProperty(layer.id, 'visibility', 'none');
+                  } catch (e) {
+                    // Ignore errors for layers that don't support visibility
+                  }
+                }
+              });
+            }
+          }
+        }}
         mapboxAccessToken={process.env.NEXT_PUBLIC_MAPBOX_TOKEN}
         style={{ width: '100%', height: '100%' }}
-        maxBounds={GTA_BOUNDS}
-        maxBoundsViscosity={1.0}
-        renderWorldCopies={false}
+        renderWorldCopies={true}
         antialias={true}
+        projection={{ name: 'globe' }}
       >
         {/* 3D Buildings Layer */}
         <Layer
@@ -320,18 +476,18 @@ export default function Map3D() {
       </Map>
 
       {loading && (
-        <div className="absolute top-4 right-4 z-[1000] bg-black text-white px-4 py-2 rounded">
-          Loading data...
+        <div className="absolute top-4 right-4 z-[1000] h-10 w-10 bg-black border border-white/20 rounded-lg flex items-center justify-center">
+          <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div>
         </div>
       )}
 
       {/* Info Panel */}
       {regionData && selectedPoint && (
-        <div className="absolute top-4 right-4 bg-black text-white p-4 rounded-lg shadow-xl z-[1000] max-w-md max-h-[80vh] overflow-y-auto">
+        <div className="absolute top-4 right-4 bg-black text-white p-4 rounded-lg shadow-xl z-[1000] max-w-md max-h-[80vh] overflow-y-auto custom-scrollbar">
           <div className="flex justify-between items-start mb-4">
             <div>
               <h2 className="text-lg font-bold">{selectedPoint.address || 'Analysis Results'}</h2>
-              <p className="text-sm text-gray-300">
+              <p className="text-sm text-stone-300">
                 {selectedPoint.lat.toFixed(4)}, {selectedPoint.lon.toFixed(4)}
               </p>
             </div>
@@ -347,202 +503,252 @@ export default function Map3D() {
                   duration: 1500,
                 });
               }}
-              className="text-gray-300 hover:text-white text-xl"
+              className="text-stone-300 hover:text-white text-xl cursor-pointer"
             >
               ×
             </button>
           </div>
 
-          {/* Panorama Preview */}
-          {panoramaLoading ? (
-            <div className="mb-4 bg-gray-800 border border-gray-700 rounded-lg p-4 flex items-center justify-center">
-              <div className="flex items-center gap-3">
-                <div className="animate-spin rounded-full h-5 w-5 border-2 border-white border-t-transparent"></div>
-                <span className="text-sm text-gray-300">Generating panorama...</span>
-              </div>
-            </div>
-          ) : panoramaPath ? (
-            <div className="mb-4">
-              <button
-                onClick={() => setPanoramaViewerOpen(true)}
-                className="w-full border border-gray-700 rounded-lg overflow-hidden hover:border-gray-500 transition-all group cursor-pointer"
-              >
-                <img 
-                  src={`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/${panoramaPath}`}
-                  alt="Street View Panorama"
-                  className="w-full h-32 object-cover group-hover:scale-105 transition-transform duration-300"
-                  onError={(e) => {
-                    console.error('Failed to load panorama thumbnail:', e);
-                  }}
-                />
-              </button>
-              <p className="text-xs text-gray-400 mt-2 text-center">Click to explore in 360°</p>
-            </div>
-          ) : null}
+          {/* Content */}
+          <div className="space-y-3">
+              {/* Panorama Preview */}
+              {panoramaLoading ? (
+                <div className="bg-stone-800/50 border border-stone-700 rounded-lg p-4 flex items-center justify-center">
+                  <div className="flex items-center gap-3">
+                    <div className="animate-spin rounded-full h-5 w-5 border-2 border-white border-t-transparent"></div>
+                    <span className="text-sm text-stone-300">Generating panorama...</span>
+                  </div>
+                </div>
+              ) : panoramaPath ? (
+                <div 
+                  className="relative w-full border border-stone-700 rounded-lg overflow-hidden cursor-pointer group"
+                  onClick={() => setPanoramaViewerOpen(true)}
+                >
+                  <img 
+                    src={`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/${panoramaPath}`}
+                    alt="Street View Panorama"
+                    className="w-full h-32 object-cover"
+                    onError={(e) => {
+                      console.error('Failed to load panorama thumbnail:', e);
+                    }}
+                  />
+                  <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-center justify-center">
+                    <span className="text-white text-sm font-medium">Explore →</span>
+                  </div>
+                </div>
+              ) : null}
 
-          <div className="space-y-3 text-sm">
-            {/* Nearest Green Space */}
-            <div>
-              <p className="text-gray-400">Nearest Green Space:</p>
-              {regionData.nearby_data.green_spaces && regionData.nearby_data.green_spaces.length > 0 ? (
-                <p className="font-medium text-white">
-                  {regionData.nearby_data.green_spaces[0].name}
-                  <span className="text-gray-400 text-xs ml-2">
-                    ({(regionData.nearby_data.green_spaces[0].distance / 1000).toFixed(2)} km)
-                  </span>
-                </p>
-              ) : (
-                <p className="text-gray-500 text-xs">None nearby</p>
-              )}
-            </div>
+              {/* Ecological Metrics */}
+              {regionData.ecological_score && (
+                <div className="bg-stone-800/50 rounded-lg p-3 space-y-3">
+                  <h3 className="text-xs font-semibold text-stone-400 uppercase tracking-wider">Ecological Metrics</h3>
+                
+                {/* Circular Progress Indicators */}
+                <div className="grid grid-cols-4 gap-3 mb-4">
+                  {/* Green Space Quality */}
+                  <div className="flex flex-col items-center">
+                    <div className="relative w-16 h-16">
+                      <svg className="transform -rotate-90 w-16 h-16">
+                        <circle cx="32" cy="32" r="28" stroke="currentColor" strokeWidth="6" fill="none" className="text-stone-700" />
+                        <circle 
+                          cx="32" cy="32" r="28" 
+                          stroke="currentColor" 
+                          strokeWidth="6" 
+                          fill="none" 
+                          strokeDasharray={`${2 * Math.PI * 28}`}
+                          strokeDashoffset={animateMetrics ? `${2 * Math.PI * 28 * (1 - (regionData.ecological_score.metrics?.green_space_proximity?.score || 0) / 10)}` : `${2 * Math.PI * 28}`}
+                          className="text-emerald-400 transition-all duration-1000"
+                          strokeLinecap="round"
+                        />
+                      </svg>
+                      <div className="absolute inset-0 flex items-center justify-center">
+                        <span className="text-sm font-bold text-white">
+                          {Math.round(((regionData.ecological_score.metrics?.green_space_proximity?.score || 0) / 10) * 100)}%
+                        </span>
+                      </div>
+                    </div>
+                    <p className="text-xs text-stone-400 mt-2 text-center uppercase tracking-wide">Green Space</p>
+                  </div>
 
-            {/* Nearest Environmental Area */}
-            <div>
-              <p className="text-gray-400">Nearest Environmental Area:</p>
-              {regionData.nearby_data.environmental_areas && regionData.nearby_data.environmental_areas.length > 0 ? (
-                <p className="font-medium text-white">
-                  {regionData.nearby_data.environmental_areas[0].name}
-                  <span className="text-gray-400 text-xs ml-2">
-                    ({(regionData.nearby_data.environmental_areas[0].distance / 1000).toFixed(2)} km)
-                  </span>
-                </p>
-              ) : (
-                <p className="text-gray-500 text-xs">None nearby</p>
-              )}
-            </div>
+                  {/* Environmental Quality */}
+                  <div className="flex flex-col items-center">
+                    <div className="relative w-16 h-16">
+                      <svg className="transform -rotate-90 w-16 h-16">
+                        <circle cx="32" cy="32" r="28" stroke="currentColor" strokeWidth="6" fill="none" className="text-stone-700" />
+                        <circle 
+                          cx="32" cy="32" r="28" 
+                          stroke="currentColor" 
+                          strokeWidth="6" 
+                          fill="none" 
+                          strokeDasharray={`${2 * Math.PI * 28}`}
+                          strokeDashoffset={animateMetrics ? `${2 * Math.PI * 28 * (1 - (regionData.ecological_score.metrics?.environmental_area_proximity?.score || 0) / 10)}` : `${2 * Math.PI * 28}`}
+                          className="text-amber-400 transition-all duration-1000"
+                          strokeLinecap="round"
+                        />
+                      </svg>
+                      <div className="absolute inset-0 flex items-center justify-center">
+                        <span className="text-sm font-bold text-white">
+                          {Math.round(((regionData.ecological_score.metrics?.environmental_area_proximity?.score || 0) / 10) * 100)}%
+                        </span>
+                      </div>
+                    </div>
+                    <p className="text-xs text-stone-400 mt-2 text-center uppercase tracking-wide">Environment</p>
+                  </div>
 
-            {/* Nearest First Nation */}
-            <div>
-              <p className="text-gray-400">Nearest First Nation:</p>
-              {regionData.nearest_first_nation ? (
-                <p className="font-medium text-white">
-                  {regionData.nearest_first_nation.name}
-                  <span className="text-gray-400 text-xs ml-2">
-                    ({(regionData.nearest_first_nation.distance / 1000).toFixed(2)} km)
-                  </span>
-                </p>
-              ) : (
-                <p className="text-gray-500 text-xs">None nearby</p>
-              )}
-            </div>
+                  {/* Tree Coverage */}
+                  <div className="flex flex-col items-center">
+                    <div className="relative w-16 h-16">
+                      <svg className="transform -rotate-90 w-16 h-16">
+                        <circle cx="32" cy="32" r="28" stroke="currentColor" strokeWidth="6" fill="none" className="text-stone-700" />
+                        <circle 
+                          cx="32" cy="32" r="28" 
+                          stroke="currentColor" 
+                          strokeWidth="6" 
+                          fill="none" 
+                          strokeDasharray={`${2 * Math.PI * 28}`}
+                          strokeDashoffset={animateMetrics ? `${2 * Math.PI * 28 * (1 - (regionData.ecological_score.metrics?.street_tree_count?.score || 0) / 10)}` : `${2 * Math.PI * 28}`}
+                          className="text-rose-400 transition-all duration-1000"
+                          strokeLinecap="round"
+                        />
+                      </svg>
+                      <div className="absolute inset-0 flex items-center justify-center">
+                        <span className="text-sm font-bold text-white">
+                          {Math.round(((regionData.ecological_score.metrics?.street_tree_count?.score || 0) / 10) * 100)}%
+                        </span>
+                      </div>
+                    </div>
+                    <p className="text-xs text-stone-400 mt-2 text-center uppercase tracking-wide">Tree Cover</p>
+                  </div>
 
-            <div className="border-t border-gray-700 pt-3 mt-3">
-              {/* Indigenous Territory */}
-              <div>
-                <p className="text-gray-400">Indigenous Territory:</p>
-                {regionData.indigenous_territory ? (
-                  <p className="font-medium text-white">{regionData.indigenous_territory.name}</p>
-                ) : (
-                  <p className="text-gray-500 text-xs">Not in a territory</p>
-                )}
-              </div>
-
-              {/* Treaties */}
-              <div className="mt-3">
-                <p className="text-gray-400">Treaties:</p>
-                {regionData.nearby_data.indigenous_treaties && regionData.nearby_data.indigenous_treaties.length > 0 ? (
-                  <p className="font-medium text-white">{regionData.nearby_data.indigenous_treaties[0].name}</p>
-                ) : (
-                  <p className="text-gray-500 text-xs">Not in a treaty area</p>
-                )}
-              </div>
-
-              {/* Languages */}
-              <div className="mt-3">
-                <p className="text-gray-400">Indigenous Language:</p>
-                {regionData.nearby_data.indigenous_languages && regionData.nearby_data.indigenous_languages.length > 0 ? (
-                  <p className="font-medium text-white">{regionData.nearby_data.indigenous_languages[0].name}</p>
-                ) : (
-                  <p className="text-gray-500 text-xs">Not in a language region</p>
-                )}
-              </div>
-            </div>
-
-            {/* Ecological Sensitivity Score */}
-            {regionData.ecological_score && (
-              <div className="border-t border-gray-700 pt-3 mt-3">
-                <div>
-                  <p className="text-gray-400">Ecological Sensitivity Score:</p>
-                  <div className="flex items-baseline gap-2">
-                    <p className="text-2xl font-bold text-white">
-                      {regionData.ecological_score.normalized_score?.toFixed(1) || '0.0'}
-                    </p>
-                    <p className="text-sm text-gray-400">/ 10</p>
-                    <p className="text-xs text-gray-500">
-                      ({regionData.ecological_score.total_score?.toFixed(1) || '0'} / 30 raw)
-                    </p>
+                  {/* Overall Score */}
+                  <div className="flex flex-col items-center">
+                    <div className="relative w-16 h-16">
+                      <svg className="transform -rotate-90 w-16 h-16">
+                        <circle cx="32" cy="32" r="28" stroke="currentColor" strokeWidth="6" fill="none" className="text-stone-700" />
+                        <circle 
+                          cx="32" cy="32" r="28" 
+                          stroke="currentColor" 
+                          strokeWidth="6" 
+                          fill="none" 
+                          strokeDasharray={`${2 * Math.PI * 28}`}
+                          strokeDashoffset={animateMetrics ? `${2 * Math.PI * 28 * (1 - (regionData.ecological_score.normalized_score || 0) / 10)}` : `${2 * Math.PI * 28}`}
+                          className="text-sky-400 transition-all duration-1000"
+                          strokeLinecap="round"
+                        />
+                      </svg>
+                      <div className="absolute inset-0 flex items-center justify-center">
+                        <span className="text-sm font-bold text-white">
+                          {Math.round(((regionData.ecological_score.normalized_score || 0) / 10) * 100)}%
+                        </span>
+                      </div>
+                    </div>
+                    <p className="text-xs text-stone-400 mt-2 text-center uppercase tracking-wide">Overall</p>
                   </div>
                 </div>
 
-                {/* 3-30-300 Rule Compliance */}
-                {regionData.ecological_score.rule_compliance && (
-                  <div className="mt-2 space-y-1">
-                    <p className="text-xs text-gray-400">3-30-300 Rule Status:</p>
-                    <div className="flex items-center gap-2 text-xs">
-                      <span className={regionData.ecological_score.rule_compliance.has_3_trees ? 'text-green-400' : 'text-red-400'}>
-                        {regionData.ecological_score.rule_compliance.has_3_trees ? '✓' : '✗'}
-                      </span>
-                      <span className="text-gray-300">
-                        {regionData.ecological_score.metrics?.street_tree_count?.count || 0} trees visible
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-2 text-xs">
-                      <span className={regionData.ecological_score.rule_compliance.within_300m_green_space ? 'text-green-400' : 'text-red-400'}>
-                        {regionData.ecological_score.rule_compliance.within_300m_green_space ? '✓' : '✗'}
-                      </span>
-                      <span className="text-gray-300">Within 300m of green space</span>
-                    </div>
-                  </div>
-                )}
-
-                {/* Detailed Metrics */}
-                <div className="mt-3 space-y-2 text-xs">
-                  <div>
-                    <p className="text-gray-500">Environmental Area Proximity:</p>
-                    <p className="text-white">
-                      {regionData.ecological_score.metrics?.environmental_area_proximity?.score?.toFixed(1) || '0.0'} / 10
-                      {regionData.ecological_score.metrics?.environmental_area_proximity?.distance_meters && (
-                        <span className="text-gray-400 ml-2">
-                          ({(regionData.ecological_score.metrics.environmental_area_proximity.distance_meters).toFixed(0)}m away)
-                        </span>
-                      )}
+                {/* Status Indicators */}
+                <div className="grid grid-cols-2 gap-3 pt-3 border-t border-stone-700">
+                  <div className="bg-stone-800/50 rounded p-2">
+                    <p className="text-xs text-stone-400 uppercase tracking-wide mb-1">Status</p>
+                    <p className="text-sm font-semibold text-white">
+                      {regionData.ecological_score.normalized_score >= 7 ? 'Resilient' : 
+                       regionData.ecological_score.normalized_score >= 4 ? 'Moderate' : 'Vulnerable'}
                     </p>
                   </div>
-                  
-                  <div>
-                    <p className="text-gray-500">Green Space Proximity:</p>
-                    <p className="text-white">
-                      {regionData.ecological_score.metrics?.green_space_proximity?.score?.toFixed(1) || '0.0'} / 10
-                      {regionData.ecological_score.metrics?.green_space_proximity?.distance_meters && (
-                        <span className="text-gray-400 ml-2">
-                          ({(regionData.ecological_score.metrics.green_space_proximity.distance_meters).toFixed(0)}m away)
-                        </span>
-                      )}
-                    </p>
-                  </div>
-                  
-                  <div>
-                    <p className="text-gray-500">Street Tree Count:</p>
-                    <p className="text-white">
-                      {regionData.ecological_score.metrics?.street_tree_count?.score?.toFixed(1) || '0.0'} / 10
-                      <span className="text-gray-400 ml-2">
-                        ({regionData.ecological_score.metrics?.street_tree_count?.count || 0} trees)
-                      </span>
+                  <div className="bg-stone-800/50 rounded p-2">
+                    <p className="text-xs text-stone-400 uppercase tracking-wide mb-1">Priority</p>
+                    <p className="text-sm font-semibold text-white">
+                      {regionData.ecological_score.rule_compliance?.within_300m_green_space ? 'Priority B' : 'Priority A'}
                     </p>
                   </div>
                 </div>
               </div>
             )}
 
-            {/* AI Agents Button */}
-            <div className="border-t border-gray-700 pt-3 mt-3">
-              <button
-                onClick={() => setAgentModalOpen(true)}
-                className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3 px-4 rounded-lg font-medium transition-colors"
-              >
-                Open AI Agents
-              </button>
-            </div>
+              {/* Nearby Locations Card */}
+              <div className="bg-stone-800/50 rounded-lg p-3 space-y-2">
+                <h3 className="text-xs font-semibold text-stone-400 uppercase tracking-wider mb-2">Nearby Locations</h3>
+                
+                {/* Green Space */}
+                <div>
+                  <p className="text-xs text-stone-400 mb-0.5">Green Space</p>
+                  {regionData.nearby_data.green_spaces && regionData.nearby_data.green_spaces.length > 0 ? (
+                    <p className="text-sm font-medium text-white truncate">
+                      {toTitleCase(regionData.nearby_data.green_spaces[0].name)}
+                      <span className="text-stone-400 text-xs ml-1">
+                        ({(regionData.nearby_data.green_spaces[0].distance / 1000).toFixed(2)} km)
+                      </span>
+                    </p>
+                  ) : (
+                    <p className="text-xs text-stone-500">None nearby</p>
+                  )}
+                </div>
+
+                {/* Environmental Area */}
+                <div>
+                  <p className="text-xs text-stone-400 mb-0.5">Environmental Area</p>
+                  {regionData.nearby_data.environmental_areas && regionData.nearby_data.environmental_areas.length > 0 ? (
+                    <p className="text-sm font-medium text-white truncate">
+                      {toTitleCase(regionData.nearby_data.environmental_areas[0].name)}
+                      <span className="text-stone-400 text-xs ml-1">
+                        ({(regionData.nearby_data.environmental_areas[0].distance / 1000).toFixed(2)} km)
+                      </span>
+                    </p>
+                  ) : (
+                    <p className="text-xs text-stone-500">None nearby</p>
+                  )}
+                </div>
+              </div>
+
+          {/* Indigenous Context Card */}
+          <div className="bg-stone-800/50 rounded-lg p-3 space-y-2">
+            <h3 className="text-xs font-semibold text-stone-400 uppercase tracking-wider mb-2">Indigenous Context</h3>
+                
+                {/* First Nation */}
+                <div>
+                  <p className="text-xs text-stone-400 mb-0.5">First Nation</p>
+                  {regionData.nearest_first_nation ? (
+                    <p className="text-sm font-medium text-white truncate">
+                      {regionData.nearest_first_nation.name}
+                      <span className="text-stone-400 text-xs ml-1">
+                        ({(regionData.nearest_first_nation.distance / 1000).toFixed(2)} km)
+                      </span>
+                    </p>
+                  ) : (
+                    <p className="text-xs text-stone-500">None nearby</p>
+                  )}
+                </div>
+
+                {/* Territory */}
+                <div>
+                  <p className="text-xs text-stone-400 mb-0.5">Territory</p>
+                  {regionData.indigenous_territory ? (
+                    <p className="text-sm font-medium text-white">{regionData.indigenous_territory.name}</p>
+                  ) : (
+                    <p className="text-xs text-stone-500">Not in a territory</p>
+                  )}
+                </div>
+
+                {/* Treaties */}
+                <div>
+                  <p className="text-xs text-stone-400 mb-0.5">Treaty</p>
+                  {regionData.nearby_data.indigenous_treaties && regionData.nearby_data.indigenous_treaties.length > 0 ? (
+                    <p className="text-sm font-medium text-white">{regionData.nearby_data.indigenous_treaties[0].name}</p>
+                  ) : (
+                    <p className="text-xs text-stone-500">Not in a treaty area</p>
+                  )}
+                </div>
+
+                {/* Languages */}
+                <div>
+                  <p className="text-xs text-stone-400 mb-0.5">Language</p>
+                  {regionData.nearby_data.indigenous_languages && regionData.nearby_data.indigenous_languages.length > 0 ? (
+                    <p className="text-sm font-medium text-white">{regionData.nearby_data.indigenous_languages[0].name}</p>
+                  ) : (
+                    <p className="text-xs text-stone-500">Not in a language region</p>
+                  )}
+                </div>
+              </div>
           </div>
         </div>
       )}
