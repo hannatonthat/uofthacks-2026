@@ -2,6 +2,11 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { createSustainabilityChat, addSustainabilityMessage, ChatMessage, deleteThread } from '@/lib/api';
+import { 
+  trackAgentResponseRated,
+  getDeviceId,
+  LocationData
+} from '@/lib/amplitude';
 
 interface PanoramaViewerProps {
   isOpen: boolean;
@@ -13,6 +18,11 @@ interface PanoramaViewerProps {
     address: string;
     territory?: string;
   } | null;
+}
+
+interface MessageRating {
+  messageIndex: number;
+  rating: 1 | -1;
 }
 
 // Declare pannellum on window for TypeScript
@@ -39,6 +49,9 @@ export default function PanoramaViewer({ isOpen, onClose, panoramaPath, location
   const [imageHistory, setImageHistory] = useState<string[]>([]);
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const [currentDisplayImage, setCurrentDisplayImage] = useState<string | null>(null);
+  
+  // Rating state
+  const [ratings, setRatings] = useState<MessageRating[]>([]);
 
   // Handle close and cleanup
   const handleClose = async () => {
@@ -277,6 +290,71 @@ export default function PanoramaViewer({ isOpen, onClose, panoramaPath, location
     }
   };
 
+  const handleRating = async (messageIndex: number, rating: 1 | -1) => {
+    if (!threadId) return;
+
+    // Find the user message and agent response
+    const userMessage = messages[messageIndex - 1]?.content || '';
+    const agentResponse = messages[messageIndex]?.content || '';
+
+    // Update local state
+    setRatings(prev => [
+      ...prev.filter(r => r.messageIndex !== messageIndex),
+      { messageIndex, rating }
+    ]);
+
+    // Track with Amplitude
+    const location: LocationData | undefined = locationData ? {
+      lat: locationData.lat,
+      lon: locationData.lon,
+      territory: locationData.territory,
+      address: locationData.address,
+    } : undefined;
+
+    trackAgentResponseRated(
+      'sustainability',
+      threadId,
+      messageIndex,
+      rating,
+      userMessage,
+      agentResponse,
+      location
+    );
+
+    // Send to backend for storage and AI analysis
+    try {
+      const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+      await fetch(`${API_BASE_URL}/api/ratings`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          user_id: getDeviceId(),
+          thread_id: threadId,
+          agent_type: 'sustainability',
+          message_index: messageIndex,
+          rating,
+          context: {
+            user_message: userMessage,
+            agent_response: agentResponse,
+            location: locationData ? {
+              lat: locationData.lat,
+              lon: locationData.lon,
+            } : undefined,
+          }
+        }),
+      });
+    } catch (error) {
+      console.error('Failed to save rating:', error);
+    }
+  };
+
+  const getRatingForMessage = (messageIndex: number): 1 | -1 | null => {
+    const rating = ratings.find(r => r.messageIndex === messageIndex);
+    return rating ? rating.rating : null;
+  };
+
   if (!isOpen || !panoramaPath) return null;
 
   return (
@@ -354,22 +432,53 @@ export default function PanoramaViewer({ isOpen, onClose, panoramaPath, location
               {/* Chat Messages */}
               <div className="flex-1 overflow-y-auto p-4 space-y-4">
                 {messages.map((message, index) => (
-                  <div
-                    key={index}
-                    className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                  >
+                  <div key={index}>
                     <div
-                      className={`max-w-[85%] rounded-lg px-4 py-2 ${
-                        message.role === 'user'
-                          ? 'bg-blue-600 text-white'
-                          : 'bg-gray-800 text-gray-100'
-                      }`}
+                      className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
                     >
-                      <div className="text-xs font-semibold mb-1 opacity-75">
-                        {message.role === 'user' ? 'You' : 'Sustainability Agent'}
+                      <div
+                        className={`max-w-[85%] rounded-lg px-4 py-2 ${
+                          message.role === 'user'
+                            ? 'bg-blue-600 text-white'
+                            : 'bg-gray-800 text-gray-100'
+                        }`}
+                      >
+                        <div className="text-xs font-semibold mb-1 opacity-75">
+                          {message.role === 'user' ? 'You' : 'Sustainability Agent'}
+                        </div>
+                        <div className="whitespace-pre-wrap text-sm">{message.content}</div>
                       </div>
-                      <div className="whitespace-pre-wrap text-sm">{message.content}</div>
                     </div>
+                    
+                    {/* Rating buttons for assistant messages */}
+                    {message.role === 'assistant' && index > 0 && (
+                      <div className="flex justify-start mt-1 ml-2">
+                        <div className="flex gap-2 text-xs">
+                          <button
+                            onClick={() => handleRating(index, 1)}
+                            className={`px-2 py-1 rounded transition-colors ${
+                              getRatingForMessage(index) === 1
+                                ? 'bg-green-600 text-white'
+                                : 'bg-gray-700 text-gray-400 hover:bg-gray-600 hover:text-white'
+                            }`}
+                            title="Helpful response"
+                          >
+                            👍
+                          </button>
+                          <button
+                            onClick={() => handleRating(index, -1)}
+                            className={`px-2 py-1 rounded transition-colors ${
+                              getRatingForMessage(index) === -1
+                                ? 'bg-red-600 text-white'
+                                : 'bg-gray-700 text-gray-400 hover:bg-gray-600 hover:text-white'
+                            }`}
+                            title="Not helpful"
+                          >
+                            👎
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ))}
 

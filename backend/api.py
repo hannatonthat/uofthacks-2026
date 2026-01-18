@@ -3,10 +3,12 @@
 from fastapi import FastAPI, HTTPException, Query, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional, Dict
+from typing import Optional, Dict, Any
 import uuid
 import os
 import shutil
+from datetime import datetime
+from database import get_collection
 
 from agents import SustainabilityAgent, IndigenousContextAgent, ProposalWorkflowAgent
 
@@ -33,6 +35,7 @@ class ChatRequest(BaseModel):
     """Request body for chat endpoints."""
     agent: str  # "sustainability", "indigenous", "proposal"
     message: str
+    user_id: Optional[str] = None  # For personalization
 
 
 class ChatResponse(BaseModel):
@@ -48,13 +51,15 @@ def create_chat(request: ChatRequest) -> ChatResponse:
     """Create a new chat thread with the specified agent."""
     thread_id = str(uuid.uuid4())
     
-    # Initialize the appropriate agent
+    # Initialize the appropriate agent with user_id for personalization
+    user_id = request.user_id
+    
     if request.agent.lower() == "sustainability":
-        agent = SustainabilityAgent()
+        agent = SustainabilityAgent(user_id=user_id)
     elif request.agent.lower() == "indigenous":
-        agent = IndigenousContextAgent()
+        agent = IndigenousContextAgent(user_id=user_id)
     elif request.agent.lower() == "proposal":
-        agent = ProposalWorkflowAgent()
+        agent = ProposalWorkflowAgent(user_id=user_id)
     else:
         raise HTTPException(status_code=400, detail="Invalid agent. Use 'sustainability', 'indigenous', or 'proposal'")
     
@@ -222,6 +227,107 @@ def delete_thread(threadid: str):
         "message": f"Thread {threadid} deleted",
         "agent": agent_name,
     }
+
+
+class RatingRequest(BaseModel):
+    """Request body for rating agent responses."""
+    user_id: str
+    thread_id: str
+    agent_type: str
+    message_index: int
+    rating: int  # 1 for thumbs up, -1 for thumbs down
+    context: Dict[str, Any]
+
+
+@app.post("/api/ratings")
+def create_rating(request: RatingRequest):
+    """Store a rating for an agent response."""
+    try:
+        ratings_collection = get_collection("agent_ratings")
+        
+        rating_doc = {
+            "user_id": request.user_id,
+            "thread_id": request.thread_id,
+            "agent_type": request.agent_type,
+            "message_index": request.message_index,
+            "rating": request.rating,
+            "context": request.context,
+            "timestamp": datetime.utcnow(),
+        }
+        
+        result = ratings_collection.insert_one(rating_doc)
+        
+        return {
+            "status": "success",
+            "rating_id": str(result.inserted_id),
+            "message": "Rating saved successfully"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save rating: {str(e)}")
+
+
+@app.get("/api/ratings/stats")
+def get_rating_stats(agent_type: Optional[str] = None):
+    """Get aggregated rating statistics."""
+    try:
+        ratings_collection = get_collection("agent_ratings")
+        
+        match_filter = {}
+        if agent_type:
+            match_filter["agent_type"] = agent_type
+        
+        pipeline = [
+            {"$match": match_filter} if match_filter else {"$match": {}},
+            {
+                "$group": {
+                    "_id": "$agent_type",
+                    "total_ratings": {"$sum": 1},
+                    "positive_ratings": {
+                        "$sum": {"$cond": [{"$eq": ["$rating", 1]}, 1, 0]}
+                    },
+                    "negative_ratings": {
+                        "$sum": {"$cond": [{"$eq": ["$rating", -1]}, 1, 0]}
+                    },
+                    "avg_rating": {"$avg": "$rating"}
+                }
+            }
+        ]
+        
+        stats = list(ratings_collection.aggregate(pipeline))
+        
+        return {
+            "status": "success",
+            "stats": stats
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get rating stats: {str(e)}")
+
+
+@app.get("/api/ratings/agent/{agent_type}")
+def get_agent_ratings(agent_type: str, limit: int = 50):
+    """Get recent ratings for a specific agent."""
+    try:
+        ratings_collection = get_collection("agent_ratings")
+        
+        ratings = list(
+            ratings_collection
+            .find({"agent_type": agent_type})
+            .sort("timestamp", -1)
+            .limit(limit)
+        )
+        
+        # Convert ObjectId to string for JSON serialization
+        for rating in ratings:
+            rating["_id"] = str(rating["_id"])
+        
+        return {
+            "status": "success",
+            "agent_type": agent_type,
+            "count": len(ratings),
+            "ratings": ratings
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get agent ratings: {str(e)}")
 
 
 @app.get("/health")

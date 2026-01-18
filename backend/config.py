@@ -25,6 +25,7 @@ COLLECTIONS = {
     "user_events": "user_events",
     "user_preferences": "user_preferences",
     "agent_sessions": "agent_sessions",
+    "agent_ratings": "agent_ratings",
 }
 
 # Data file paths

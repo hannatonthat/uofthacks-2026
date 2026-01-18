@@ -23,10 +23,11 @@ class SustainabilityAgent(BaseAgent):
 		future_vision_path: str
 		error: Optional[str]
 
-	def __init__(self, name: str = "sustainability-agent", config: Optional[AgentConfig] = None, base_prompt: str = ""):
+	def __init__(self, name: str = "sustainability-agent", config: Optional[AgentConfig] = None, base_prompt: str = "", user_id: Optional[str] = None):
 		"""Init sustainability agent, wire Backboard Gemini assistant, cache prompts."""
 		super().__init__(name, config)
 		self.thread_id: Optional[str] = None
+		self.user_id = user_id  # For personalization tracking
 		
 		# Load prompts from centralized config
 		loaded_base_prompt = get_prompt("sustainability_agent", "base_prompt")
@@ -66,8 +67,39 @@ class SustainabilityAgent(BaseAgent):
 		constraint_text = "\n".join(f"- {c}" for c in constraints) if constraints else ""
 		history_text = self._history_to_text()
 
+		# NEW: Get personalization context from AnalyticsAgent
+		personalization_prompt = ""
+		if self.user_id:
+			try:
+				from .analytics_agent import AnalyticsAgent
+				analytics = AnalyticsAgent()
+				insights = analytics.get_rating_insights(user_id=self.user_id, agent_type="sustainability")
+				personalization_prompt = insights.personalization_prompt
+				
+				# DEBUG: Show what's happening
+				if insights.total_ratings > 0:
+					print(f"\n🤖 ═══ AI PERSONALIZATION ACTIVE ═══")
+					print(f"   👤 User: {self.user_id[:8]}...")
+					print(f"   🎯 Agent: sustainability")
+					print(f"   📊 Total ratings: {insights.total_ratings}")
+					print(f"   ⭐ Avg rating: {insights.avg_rating:.2f} | Satisfaction: {insights.positive_percent:.1f}%")
+					if insights.common_issues:
+						print(f"   ⚠️  AI detected issues: {', '.join(insights.common_issues)}")
+					if insights.ai_analysis:
+						print(f"   🧠 AI Analysis: {insights.ai_analysis[:150]}...")
+					if personalization_prompt:
+						print(f"   ✨ Applying adaptation: {personalization_prompt[:100]}...")
+					if insights.confidence_score > 0:
+						print(f"   📈 Confidence: {insights.confidence_score:.0%}")
+					print(f"   ═══════════════════════════════════\n")
+				
+			except Exception as e:
+				print(f"  [!] Failed to get personalization insights: {e}")
+				personalization_prompt = ""
+
 		prompt_parts = [
 			self._prompt or "You are an expert in sustainable land design that respects indigenous practices.",
+			personalization_prompt,  # NEW: Add AI-generated personalization
 			f"Context: {context}" if context else "Context: none provided",
 			f"User request: {user_query}",
 			"Constraints:",
@@ -315,7 +347,7 @@ class SustainabilityAgent(BaseAgent):
 class IndigenousContextAgent(BaseAgent):
 	"""Adds indigenous context, builds proposal sections, and persists threads via Backboard."""
 
-	def __init__(self, name: str = "indigenous-context-agent", config: Optional[AgentConfig] = None, base_prompt: str = ""):
+	def __init__(self, name: str = "indigenous-context-agent", config: Optional[AgentConfig] = None, base_prompt: str = "", user_id: Optional[str] = None):
 		"""
 		Initialize IndigenousContextAgent with Backboard.io integration.
 		
@@ -368,6 +400,7 @@ class IndigenousContextAgent(BaseAgent):
 		self.backboard: Optional[BackboardProvider] = None
 		self.assistant_id: Optional[str] = None
 		self.thread_id: Optional[str] = None
+		self.user_id = user_id  # For personalization tracking
 		
 		try:
 			# Create Backboard provider (handles API key loading)
@@ -467,11 +500,45 @@ class IndigenousContextAgent(BaseAgent):
 		  - self.assistant_id must be created
 		"""
 		try:
+			# NEW: Get personalization context
+			personalization_prompt = ""
+			if self.user_id:
+				try:
+					from .analytics_agent import AnalyticsAgent
+					analytics = AnalyticsAgent()
+					insights = analytics.get_rating_insights(user_id=self.user_id, agent_type="indigenous")
+					personalization_prompt = insights.personalization_prompt
+					
+					# DEBUG: Show what's happening
+					if insights.total_ratings > 0:
+						print(f"\n🤖 ═══ AI PERSONALIZATION ACTIVE ═══")
+						print(f"   👤 User: {self.user_id[:8]}...")
+						print(f"   🎯 Agent: indigenous")
+						print(f"   📊 Total ratings: {insights.total_ratings}")
+						print(f"   ⭐ Avg rating: {insights.avg_rating:.2f} | Satisfaction: {insights.positive_percent:.1f}%")
+						if insights.common_issues:
+							print(f"   ⚠️  AI detected issues: {', '.join(insights.common_issues)}")
+						if insights.ai_analysis:
+							print(f"   🧠 AI Analysis: {insights.ai_analysis[:150]}...")
+						if personalization_prompt:
+							print(f"   ✨ Applying adaptation: {personalization_prompt[:100]}...")
+						if insights.confidence_score > 0:
+							print(f"   📈 Confidence: {insights.confidence_score:.0%}")
+						print(f"   ═══════════════════════════════════\n")
+					
+				except Exception as e:
+					print(f"  [!] Failed to get personalization insights: {e}")
+			
+			# Prepend personalization to query
+			enhanced_query = query
+			if personalization_prompt:
+				enhanced_query = f"{personalization_prompt}\n\n{query}"
+			
 			# Call Backboard API
 			# Returns (response_text, thread_id)
 			response, self.thread_id = self.backboard.chat(
 				self.assistant_id,
-				query,
+				enhanced_query,
 				self.thread_id
 			)
 			
@@ -561,9 +628,10 @@ class IndigenousContextAgent(BaseAgent):
 class ProposalWorkflowAgent(BaseAgent):
 	"""Manages 10-step submission workflow, contacts, and outreach emails."""
 
-	def __init__(self, name: str = "proposal-workflow-agent", config: Optional[AgentConfig] = None, base_prompt: str = ""):
+	def __init__(self, name: str = "proposal-workflow-agent", config: Optional[AgentConfig] = None, base_prompt: str = "", user_id: Optional[str] = None):
 		"""Set prompts, init workflow tracking, and prep contacts list."""
 		super().__init__(name, config)
+		self.user_id = user_id  # For personalization tracking
 		
 		# Load prompts from centralized config
 		loaded_base_prompt = get_prompt("proposal_workflow_agent", "base_prompt")
@@ -610,43 +678,18 @@ class ProposalWorkflowAgent(BaseAgent):
 
 	def get_submission_workflow(self, region: str) -> List[str]:
 		"""
-		GET STEP-BY-STEP WORKFLOW for proposal submission.
+		GET STEP-BY-STEP WORKFLOW for proposal submission with AI-powered personalization.
 		
-		CURRENT IMPLEMENTATION:
-		  Returns generic 10-step workflow applicable to most regions.
-		  
-		FUTURE ENHANCEMENT:
-		  Could customize workflow per region:
-		    - British Columbia: Different tribal governance structures
-		    - Alberta: Different regulatory requirements
-		    - International: Different land rights frameworks
-		
-		  Example future implementation:
-		    if region == "British Columbia":
-		      return BC_SPECIFIC_WORKFLOW
-		    elif region == "Alberta":
-		      return ALBERTA_SPECIFIC_WORKFLOW
+		NEW: Uses AnalyticsAgent to adapt workflow based on user completion patterns.
 		
 		PARAMETERS:
-		  region: Geographic region for proposal (currently unused)
-		         Could be used in future for region-specific workflows
+		  region: Geographic region for proposal
 		
 		RETURNS:
-		  List of 10 workflow steps as strings, e.g.:
-		    [
-		      "1. Finalize proposal with indigenous perspectives",
-		      "2. Identify and document tribal leaders in region",
-		      ...
-		      "10. Execute agreement and implement with oversight"
-		    ]
-		
-		USAGE:
-		  workflow_steps = agent.get_submission_workflow("British Columbia")
-		  for i, step in enumerate(workflow_steps):
-		    print(f"{i+1}. {step}")
+		  List of workflow steps, potentially reordered/simplified based on analytics
 		"""
-		# Generic 10-step workflow (can be customized per region in future)
-		return [
+		# Default 10-step workflow
+		default_workflow = [
 			"1. Finalize proposal document with all indigenous perspectives",
 			"2. Identify and document tribal leaders and organizations in the region",
 			"3. Schedule initial consultation meetings with indigenous representatives",
@@ -658,6 +701,23 @@ class ProposalWorkflowAgent(BaseAgent):
 			"9. Prepare environmental and cultural impact assessment",
 			"10. Execute final agreement and begin implementation with community oversight",
 		]
+		
+		# NEW: Get workflow insights from analytics
+		try:
+			from .analytics_agent import AnalyticsAgent
+			analytics = AnalyticsAgent()
+			insights = analytics.get_workflow_insights(region=region)
+			
+			# If certain steps are commonly skipped, we could reorder or simplify
+			# For now, just return default but this shows the integration point
+			skipped_steps = insights.get("common_skipped_steps", [])
+			if skipped_steps:
+				print(f"  [Analytics] Steps {skipped_steps} commonly skipped - consider simplification")
+			
+		except Exception as e:
+			print(f"  [!] Failed to get workflow insights: {e}")
+		
+		return default_workflow
 
 	def add_contact(self, name: str, role: str, email: str, phone: str = "") -> None:
 		"""
@@ -792,10 +852,54 @@ class ProposalWorkflowAgent(BaseAgent):
 		"""
 		if self.backboard and self.assistant_id:
 			try:
+				# NEW: Get personalization context (CROSS-AGENT LEARNING!)
+				personalization_prompt = ""
+				if self.user_id:
+					try:
+						from .analytics_agent import AnalyticsAgent
+						analytics = AnalyticsAgent()
+						
+						# Get insights from ALL agents (not just proposal)
+						all_insights = analytics.get_rating_insights(user_id=self.user_id, agent_type=None)
+						proposal_insights = analytics.get_rating_insights(user_id=self.user_id, agent_type="proposal")
+						
+						# Use cross-agent insights if we have them, otherwise use proposal-specific
+						if all_insights.total_ratings > 0:
+							insights = all_insights
+							personalization_prompt = insights.personalization_prompt
+						else:
+							insights = proposal_insights
+							personalization_prompt = insights.personalization_prompt
+						
+						# DEBUG: Show what's happening
+						if insights.total_ratings > 0:
+							print(f"\n🤖 ═══ CROSS-AGENT AI LEARNING ═══")
+							print(f"   👤 User: {self.user_id[:8]}...")
+							print(f"   🎯 Agent: proposal (learning from ALL agents)")
+							print(f"   📊 Total ratings across ALL agents: {insights.total_ratings}")
+							print(f"   ⭐ Avg rating: {insights.avg_rating:.2f} | Satisfaction: {insights.positive_percent:.1f}%")
+							if insights.common_issues:
+								print(f"   ⚠️  AI detected issues: {', '.join(insights.common_issues)}")
+							if insights.ai_analysis:
+								print(f"   🧠 AI Analysis: {insights.ai_analysis[:150]}...")
+							if personalization_prompt:
+								print(f"   ✨ Applying adaptation: {personalization_prompt[:100]}...")
+							if insights.confidence_score > 0:
+								print(f"   📈 Confidence: {insights.confidence_score:.0%}")
+							print(f"   ═══════════════════════════════════\n")
+						
+					except Exception as e:
+						print(f"  [!] Failed to get personalization insights: {e}")
+				
+				# Prepend personalization to query
+				enhanced_query = user_query
+				if personalization_prompt:
+					enhanced_query = f"{personalization_prompt}\n\n{user_query}"
+				
 				# Use Backboard to chat with the model
 				response, thread_id = self.backboard.chat(
 					self.assistant_id,
-					user_query,
+					enhanced_query,
 					getattr(self, 'thread_id', None)
 				)
 				self.thread_id = thread_id

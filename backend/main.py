@@ -85,9 +85,20 @@ class UserPreferences(BaseModel):
 
 class ChatRequest(BaseModel):
     """Request body for chat endpoints."""
-    agent: str  # "sustainability", "indigenous", "proposal"
+    agent: Optional[str] = None  # Required for create-chat, optional for start-chat
     message: Optional[str] = None  # Optional for create endpoints
     image_path: Optional[str] = None  # Optional image path for sustainability agent
+    user_id: Optional[str] = None  # For personalization
+
+
+class RatingRequest(BaseModel):
+    """Request body for rating agent responses."""
+    user_id: str
+    thread_id: str
+    agent_type: str
+    message_index: int
+    rating: int  # 1 for thumbs up, -1 for thumbs down
+    context: Dict[str, Any]
 
 
 class ChatResponse(BaseModel):
@@ -443,15 +454,20 @@ async def get_user_preferences(user_id: str):
 @app.post("/create-chat")
 def create_chat(request: ChatRequest) -> ChatResponse:
     """Create a new chat thread with the specified agent."""
+    if not request.agent:
+        raise HTTPException(status_code=400, detail="agent field is required for create-chat")
+    
     thread_id = str(uuid.uuid4())
 
-    # Initialize the appropriate agent
+    # Initialize the appropriate agent with user_id for personalization
+    user_id = request.user_id
+    
     if request.agent.lower() == "sustainability":
-        agent = SustainabilityAgent()
+        agent = SustainabilityAgent(user_id=user_id)
     elif request.agent.lower() == "indigenous":
-        agent = IndigenousContextAgent()
+        agent = IndigenousContextAgent(user_id=user_id)
     elif request.agent.lower() == "proposal":
-        agent = ProposalWorkflowAgent()
+        agent = ProposalWorkflowAgent(user_id=user_id)
     else:
         raise HTTPException(status_code=400, detail="Invalid agent. Use 'sustainability', 'indigenous', or 'proposal'")
 
@@ -511,13 +527,13 @@ def create_chat(request: ChatRequest) -> ChatResponse:
 
 
 @app.post("/start-chat")
-def start_chat(threadid: str = Query(...), request: ChatRequest = None) -> ChatResponse:
+def start_chat(threadid: str = Query(...), request: ChatRequest = Body(...)) -> ChatResponse:
     """Start a new message in an existing thread."""
     if threadid not in threads:
         raise HTTPException(status_code=404, detail=f"Thread {threadid} not found")
-
-    if request is None:
-        raise HTTPException(status_code=400, detail="Request body required")
+    
+    if not request or not request.message:
+        raise HTTPException(status_code=400, detail="Request body with 'message' field required")
 
     thread_data = threads[threadid]
     agent = thread_data["agent"]
@@ -569,7 +585,7 @@ def start_chat(threadid: str = Query(...), request: ChatRequest = None) -> ChatR
 
 
 @app.post("/add-chat")
-def add_chat(threadid: str = Query(...), request: ChatRequest = None) -> ChatResponse:
+def add_chat(threadid: str = Query(...), request: ChatRequest = Body(...)) -> ChatResponse:
     """Add a message to an existing thread (alias for /start-chat)."""
     return start_chat(threadid=threadid, request=request)
 
@@ -822,7 +838,7 @@ def create_sustainability_chat(request: ChatRequest) -> ChatResponse:
         raise HTTPException(status_code=400, detail="This endpoint is for sustainability agent only")
     
     thread_id = str(uuid.uuid4())
-    agent = SustainabilityAgent()
+    agent = SustainabilityAgent(user_id=request.user_id)
     thread_data = {"agent": agent, "image_path": request.image_path}
     threads[thread_id] = thread_data
 
@@ -955,6 +971,174 @@ def add_sustainability_chat(threadid: str = Query(...), request: ChatRequest = B
 
 
 # Helper functions removed - no AI recommendations yet
+
+
+# Rating endpoints for Amplitude integration
+
+@app.post("/api/ratings")
+def create_rating(request: RatingRequest):
+    """Store a rating for an agent response."""
+    try:
+        ratings_collection = get_collection("agent_ratings")
+        
+        rating_doc = {
+            "user_id": request.user_id,
+            "thread_id": request.thread_id,
+            "agent_type": request.agent_type,
+            "message_index": request.message_index,
+            "rating": request.rating,
+            "context": request.context,
+            "timestamp": datetime.utcnow(),
+        }
+        
+        result = ratings_collection.insert_one(rating_doc)
+        
+        return {
+            "status": "success",
+            "rating_id": str(result.inserted_id),
+            "message": "Rating saved successfully"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save rating: {str(e)}")
+
+
+@app.get("/api/ratings/stats")
+def get_rating_stats(agent_type: Optional[str] = None):
+    """Get aggregated rating statistics."""
+    try:
+        ratings_collection = get_collection("agent_ratings")
+        
+        match_filter = {}
+        if agent_type:
+            match_filter["agent_type"] = agent_type
+        
+        pipeline = [
+            {"$match": match_filter} if match_filter else {"$match": {}},
+            {
+                "$group": {
+                    "_id": "$agent_type",
+                    "total_ratings": {"$sum": 1},
+                    "positive_ratings": {
+                        "$sum": {"$cond": [{"$eq": ["$rating", 1]}, 1, 0]}
+                    },
+                    "negative_ratings": {
+                        "$sum": {"$cond": [{"$eq": ["$rating", -1]}, 1, 0]}
+                    },
+                    "avg_rating": {"$avg": "$rating"}
+                }
+            }
+        ]
+        
+        stats = list(ratings_collection.aggregate(pipeline))
+        
+        return {
+            "status": "success",
+            "stats": stats
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get rating stats: {str(e)}")
+
+
+@app.get("/api/ratings/agent/{agent_type}")
+def get_agent_ratings(agent_type: str, limit: int = 50):
+    """Get recent ratings for a specific agent."""
+    try:
+        ratings_collection = get_collection("agent_ratings")
+        
+        ratings = list(
+            ratings_collection
+            .find({"agent_type": agent_type})
+            .sort("timestamp", -1)
+            .limit(limit)
+        )
+        
+        # Convert ObjectId to string for JSON serialization
+        for rating in ratings:
+            rating["_id"] = str(rating["_id"])
+        
+        return {
+            "status": "success",
+            "agent_type": agent_type,
+            "count": len(ratings),
+            "ratings": ratings
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get agent ratings: {str(e)}")
+
+
+@app.get("/api/ratings/debug")
+def debug_ratings():
+    """Debug endpoint - see all ratings easily."""
+    try:
+        ratings_collection = get_collection("agent_ratings")
+        
+        all_ratings = list(ratings_collection.find().sort("timestamp", -1).limit(20))
+        
+        # Convert ObjectId to string
+        for rating in all_ratings:
+            rating["_id"] = str(rating["_id"])
+        
+        return {
+            "status": "success",
+            "total_count": ratings_collection.count_documents({}),
+            "recent_ratings": all_ratings,
+            "message": "Visit http://localhost:8000/api/ratings/debug to see your ratings!"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get ratings: {str(e)}")
+
+
+@app.get("/api/analytics/summary")
+def get_analytics_summary():
+    """Get AI-powered analytics summary with insights."""
+    try:
+        from agents.analytics_agent import AnalyticsAgent
+        
+        analytics = AnalyticsAgent()
+        summary = analytics.get_analytics_summary()
+        
+        return {
+            "status": "success",
+            "summary": summary
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get analytics summary: {str(e)}")
+
+
+@app.get("/api/analytics/correlations/{user_id}")
+def get_user_correlations(user_id: str):
+    """Get AI-discovered behavioral correlations for a user."""
+    try:
+        from agents.analytics_agent import AnalyticsAgent
+        
+        analytics = AnalyticsAgent()
+        correlations = analytics.analyze_event_correlations(user_id)
+        
+        return {
+            "status": "success",
+            "user_id": user_id,
+            "correlations": correlations
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to analyze correlations: {str(e)}")
+
+
+@app.get("/api/analytics/user-insights/{user_id}")
+def get_user_insights(user_id: str):
+    """Get AI-generated personalized insights about the user's behavior."""
+    try:
+        from agents.analytics_agent import AnalyticsAgent
+        
+        analytics = AnalyticsAgent()
+        insights = analytics.generate_user_insights(user_id)
+        
+        return {
+            "status": "success",
+            "user_id": user_id,
+            "insights": insights
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate user insights: {str(e)}")
 
 
 # Run server
